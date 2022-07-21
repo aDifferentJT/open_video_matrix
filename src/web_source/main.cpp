@@ -4,7 +4,6 @@
 #include "include/cef_command_line.h"
 
 #include "../ipc_shared_object.hpp"
-#include "../open_rpc.hpp"
 #include "../triple_buffer.hpp"
 
 #include "../server/server.hpp"

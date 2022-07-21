@@ -70,7 +70,3 @@ endif()
 
 add_subdirectory(web_source)
 
-add_subdirectory(controller)
-
-add_executable(test_open_rpc test_open_rpc.cpp)
-
