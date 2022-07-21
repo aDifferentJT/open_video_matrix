@@ -23,6 +23,63 @@ jobs:
       with:
         submodules: recursive
     
+    - name: Download CEF (Linux)
+      if: runner.os == 'Linux'
+      run: curl -o cef.tar.bz2 https://cef-builds.spotifycdn.com/cef_binary_93.1.11%2Bg9e254fa%2Bchromium-93.0.4577.63_linux64_minimal.tar.bz2
+
+    - name: Download CEF (macOS)
+      if: runner.os == 'macOS'
+      run: curl -o cef.tar.bz2 https://cef-builds.spotifycdn.com/cef_binary_93.1.11%2Bg9e254fa%2Bchromium-93.0.4577.63_macosx64_minimal.tar.bz2
+
+    - name: Extract CEF (non-Windows)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir cef
+        tar xf cef.tar.bz2 -C cef --strip-components 1
+        echo "CEF_ROOT=${PWD}/cef" >> $GITHUB_ENV
+
+    - name: Download CEF (Windows)
+      if: runner.os == 'Windows'
+      run: curl -o cef.tar.bz2 https://cef-builds.spotifycdn.com/cef_binary_93.1.11%2Bg9e254fa%2Bchromium-93.0.4577.63_windows64_minimal.tar.bz2
+
+    - name: Extract CEF (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        7z x cef.tar.bz2
+        7z x cef.tar
+        echo "CEF_ROOT=$(${PWD}.ToString().Replace("\","/"))/cef_binary_93.1.11+g9e254fa+chromium-93.0.4577.63_windows64_minimal" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+
+    - name: Install boost and libfmt (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install libboost-dev libfmt-dev
+
+    - name: Install boost and libfmt (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew update
+        brew install boost fmt
+
+    - name: Install boost (Windows)
+      if: runner.os == 'Windows'
+      working-directory: "C:/Program Files"
+      run: |
+        curl -L -o boost.7z https://boostorg.jfrog.io/artifactory/main/release/1.77.0/source/boost_1_77_0.7z
+        7z x boost.7z
+        mv boost_1_77_0/boost .
+      
+    - name: Install fmt (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        git clone https://github.com/fmtlib/fmt.git
+        cd fmt
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build . --config Release
+        cmake --install .
+
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
