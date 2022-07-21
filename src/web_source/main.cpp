@@ -21,7 +21,6 @@
 #include <thread>
 
 #include <fmt/format.h>
-#include <fmt/ostream.h>
 
 #ifdef __APPLE__
 #include "include/cef_application_mac.h"
@@ -95,7 +94,7 @@ public:
   </body>
 </html>
 )html"sv,
-          "title"_a = _title, "url"_a = _url);
+          "title"_a = _title.ToString(), "url"_a = _url.ToString());
       auto mime_type = "text/html"sv;
 
       return http::string_response(req, std::move(body), mime_type, send);
