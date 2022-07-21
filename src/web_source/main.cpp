@@ -150,9 +150,10 @@ private:
 
 public:
   Client(CefRefPtr<CefBrowser> &browser, triple_buffer *output_buffer,
-         CefString &title, CefString &url, std::function<void()> &reload_clients)
-      : _browser{browser},
-        output_buffer{output_buffer}, _title{title}, _url{url}, reload_clients{reload_clients} {}
+         CefString &title, CefString &url,
+         std::function<void()> &reload_clients)
+      : _browser{browser}, output_buffer{output_buffer}, _title{title},
+        _url{url}, reload_clients{reload_clients} {}
 
   // CefClient methods
   auto GetDisplayHandler() -> CefRefPtr<CefDisplayHandler> override {
@@ -216,8 +217,8 @@ private:
 public:
   App(CefRefPtr<CefBrowser> &browser, triple_buffer *output_buffer,
       CefString &title, CefString &url, std::function<void()> &reload_clients)
-      : _browser{browser},
-        output_buffer{output_buffer}, _title{title}, _url{url}, reload_clients{reload_clients} {}
+      : _browser{browser}, output_buffer{output_buffer}, _title{title},
+        _url{url}, reload_clients{reload_clients} {}
 
   // CefApp methods
   auto GetBrowserProcessHandler()
@@ -235,8 +236,8 @@ public:
 
     settings.windowless_frame_rate = 25;
 
-    auto client =
-        CefRefPtr<Client>{new Client{_browser, output_buffer, _title, _url, reload_clients}};
+    auto client = CefRefPtr<Client>{
+        new Client{_browser, output_buffer, _title, _url, reload_clients}};
 
 #ifdef WIN32
     info.SetAsPopup(nullptr, "Web View");
@@ -325,7 +326,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                       LPTSTR lpCmdLine, int nCmdShow) {
   UNREFERENCED_PARAMETER(hPrevInstance);
   UNREFERENCED_PARAMETER(lpCmdLine);
+  UNREFERENCED_PARAMETER(nCmdShow);
+
   auto mainArgs = CefMainArgs{hInstance};
+
+  int argc = __argc;
+  char **argv = __argv;
 #else
 auto main(int argc, char **argv) -> int {
   auto mainArgs = CefMainArgs{argc, argv};
@@ -350,9 +356,10 @@ auto main(int argc, char **argv) -> int {
   auto title = CefString{};
   auto url = CefString{};
 
-  auto reload_clients = std::function<void()>{[]{}};
+  auto reload_clients = std::function<void()>{[] {}};
 
-  auto app = CefRefPtr<App>{new App{browser, output_buffer.data(), title, url, reload_clients}};
+  auto app = CefRefPtr<App>{
+      new App{browser, output_buffer.data(), title, url, reload_clients}};
 
   if (auto exitCode = CefExecuteProcess(mainArgs, nullptr, nullptr);
       exitCode >= 0) {
