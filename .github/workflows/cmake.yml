@@ -90,8 +90,8 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       if: runner.os == 'Linux'
       run: |
-        export CC='$(which gcc-11)'
-        export CXX='$(which g++-11)'
+        export CC="$(which gcc-11)"
+        export CXX="$(which g++-11)"
         cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Configure CMake (macOS)
@@ -99,8 +99,8 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       if: runner.os == 'macOS'
       run: |
-        export CC='$(brew --prefix llvm@14)/bin/clang'
-        export CXX='$(brew --prefix llvm@14)/bin/clang++'
+        export CC="$(brew --prefix llvm@14)/bin/clang"
+        export CXX="$(brew --prefix llvm@14)/bin/clang++"
         cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Configure CMake (Windows)
