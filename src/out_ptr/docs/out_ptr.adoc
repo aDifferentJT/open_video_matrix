@@ -1,0 +1,150 @@
+// Copyright ⓒ 2018-2021 ThePhD.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//  See https://github.com/ThePhD/out_ptr/blob/master/docs/out_ptr.adoc for documentation.
+
+
+# ztd.out_ptr: the {cpp}11 abstraction for passing smart pointers as parameters to `$$T**$$` arguments 
+ThePhD
+:toc:
+:toc-placement!:
+:toclevels: 3
+:idprefix:
+:source-highlighter: pygments
+:listing-caption: Code Example
+:table-caption: Illustration
+:docinfo: private-footer
+
+So, you have code that looks like this:
+
+[source,cpp]
+----
+foo_t* new_foo;
+if (!create_foo(&new_foo)) {
+  // etc. ...
+}
+----
+
+And it's not just one bit. Hundreds, maybe even thousands of calls like this are scatted all throughout your code base. You know about smart pointers, and you want to turn it into something like this for better exception safety and all that RAII goodness you hear about:
+
+[source,cpp]
+----
+std::unique_ptr<foo_t> new_foo;
+if (!create_foo(new_foo)) {
+  // etc. ...
+}
+----
+
+Or, this:
+
+[source,cpp]
+----
+std::unique_ptr<foo_t> new_foo;
+if (!create_foo(&new_foo)) {
+  // etc. ...
+}
+----
+
+The problem is, the above doesn't compile. You can manually wrap the raw pointer version into a new function, but if you have hundreds of thousands of these calls that's just not a good use of your time. Writing tooling to generate code to wrap functions to return ``std::unique_ptr`` and morph the functions into something that returns a smart pointer is also a non-starter that will take you too much time.
+
+With this library, you now can do exactly this at the call site:
+
+[source,cpp]
+----
+using zop = ztd::out_ptr;
+
+std::unique_ptr<foo_t> new_foo;
+if (!create_foo(zop::out_ptr(new_foo))) {
+  // etc. ...
+}
+----
+
+And that's pretty much the point!
+
+ztd.out_ptr provides the a way to have C code retain identical semantics to the original C code written to handle these resources while helping code work with C APIs. It ensures ``new_foo`` is guaranteed to be treated in a RAII manner. Thus, we get increased exception safety, memory leak mitigation, and all the other benefits of RAII.
+
+More formally, this library automates the `.reset(...)` call with `ztd::out_ptr::out_ptr(...)` wrapping an argument passed to a C-style function taking a `$$T**$$` argument. Additionally, it automates the `.release(...)` and `.reset(...)` paradigm with `ztd::out_ptr::inout_ptr(...)` in cases where the `T**` argument passed to the function will both delete and then allocate the resource being handled.
+
+Additional optimizations are implemented within the library to ensure good performance by default for a myriad of types, including `boost::movelib:unique_ptr` and `std::unique_ptr`. It also helps catch small errors in using `shared_ptr`-types reset calls, and works out-of-the-box for many other types including the upcoming `std::retain_ptr`, `boost::intrusive_ptr`, and any other types which follow the `.reset(...)`/`.release()` paradigm (or have constructors that behave similarly).
+
+toc::[]
+
+:leveloffset: +1
+
+ifdef::env-github[]
+link:out_ptr/overview.adoc[Overview]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/overview.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/config.adoc[Configuration]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/config.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/examples.adoc[Examples]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/examples.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/benchmarks.adoc[Benchmarks]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/benchmarks.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/caveats.adoc[Caveats]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/caveats.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/rationale.adoc[Rationale]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/rationale.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/reference.adoc[API Reference]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/reference.adoc[]
+endif::[]
+
+ifdef::env-github[]
+link:out_ptr/customization.adoc[Customization]
+endif::[]
+ifndef::env-github[]
+include::out_ptr/customization.adoc[]
+endif::[]
+
+:leveloffset: -1
+
+[[appendix]]
+## Copyright, License, and Acknowledgments
+
+This documentation is
+
+* Copyright ⓒ 2021 ThePhD
+
+and is distributed under the http://www.apache.org/licenses/LICENSE-2.0[Apache 2.0 License].

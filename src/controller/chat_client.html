@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Open Video Matrix</title>
+
+    <style>
+        table {
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: 5px;
+            border: 1px solid;
+            text-align: center;
+            vertical-align: middle;
+            max-height: 200px;
+            overflow-y: scroll;
+        }
+
+        .header_cell {
+            max-height: 200px;
+            overflow-y: scroll;
+        }
+
+        #container {
+            height: 100vh;
+            width: 100vw;
+            position: fixed;
+            left: 0px;
+            top: 0px;
+        }
+
+        #header_bar {
+            width: 100%;
+        }
+
+        #body_view {
+            flex-grow: 1;
+            flex-shrink: 1;
+            min-height: 0px;
+        }
+
+        #matrix_view {
+            overflow: scroll;
+            opacity: 0%;
+            margin: 10px;
+            padding: 10px;
+            background-color: #E0F0F0;
+            border-radius: 10px;
+            transition-property: opacity;
+            transition-duration: 0.5s;
+        }
+
+        #detail_view {
+            position: relative;
+            width: 0vw;
+            opacity: 0%;
+            margin: 10px;
+            background-color: #E0FFE0;
+            border-radius: 10px;
+            transition-property: width, opacity;
+            transition-duration: 0.5s;
+        }
+
+        #detail_view_contents {
+            box-sizing: border-box;
+            height: 100%;
+            overflow: scroll;
+            padding: 10px;
+        }
+
+        #detail_view_close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+
+        .row {
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+        }
+
+        .col {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .padding {
+            flex-grow: 1;
+            flex-shrink: 1;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container" class="col">
+        <div id="header_bar">
+            <button id="connect">Connect</button>
+            <button id="disconnect">Disconnect</button><br>
+        </div>
+        <div id="body_view" class="row">
+            <div class="col" style="max-width: 75%; flex-shrink: 0;">
+                <div id="matrix_view">
+                    <table id="matrix"></table>
+                </div>
+                <div class="padding" style="min-width: 0px;"></div>
+            </div>
+            <div class="padding"></div>
+            <div id="detail_view">
+                <div id="detail_view_contents"></div>
+                <button id="detail_view_close" onclick="set_detail_view()">Close
+            </div>
+        </div>
+    </div>
+    </div>
+    <script>
+        DataView.prototype.slice = function(offset, length) {
+            if (length == undefined) {
+                return new DataView(this.buffer, this.byteOffset + offset, this.byteLength - offset);
+            } else {
+                return new DataView(this.buffer, this.byteOffset + offset, length);
+            }
+        }
+
+        function parse_osc_int(data) {
+            return {
+                data: data.slice(4),
+                value: data.getInt32(0, false),
+            };
+        }
+
+        function parse_osc_blob(data) {
+            const {
+                data: data2,
+                value: length
+            } = parse_osc_int(data);
+
+            return {
+                data: data2.slice(length),
+                value: data2.slice(0, length),
+            };
+        }
+
+        function parse_osc_string(data) {
+            const {
+                data: data2,
+                value: blob
+            } = parse_osc_blob(data);
+
+            return {
+                data: data2,
+                value: new TextDecoder().decode(blob),
+            };
+        }
+
+        const parse_osc_argument = {
+            i: parse_osc_int,
+            s: parse_osc_string,
+            b: parse_osc_blob,
+        };
+
+        function parse_osc(data) {
+            const {
+                data: data2,
+                value: address
+            } = parse_osc_string(data);
+
+            const {
+                data: data3,
+                value: type_tags_with_delim
+            } = parse_osc_string(data2);
+
+            if (type_tags_with_delim[0] != ",") {
+                console.log("Invalid type tag string");
+                return;
+            }
+
+            const type_tags = type_tags_with_delim.slice(1);
+
+            let args = [];
+            let data4 = data3;
+            for (type_tag of type_tags) {
+                const {
+                    data: data4a,
+                    value: arg,
+                } = parse_osc_argument[type_tag](data4);
+                data4 = data4a;
+                args.push(arg);
+            }
+
+            return {
+                address: address,
+                args: args,
+            };
+        }
+
+        function serialise_osc_int(x) {
+            const buffer = new ArrayBuffer(4);
+            new DataView(buffer).setInt32(0, x, false);
+            return buffer;
+        }
+
+        function serialise_osc_blob(data) {
+            const length = function() {
+                if (data instanceof Blob) {
+                    return data.size;
+                } else if (ArrayBuffer.isView(data)) {
+                    return data.byteLength;
+                }
+            }();
+            return new Blob([serialise_osc_int(length), data]);
+        }
+
+        function serialise_osc_string(s) {
+            return serialise_osc_blob(new TextEncoder().encode(s));
+        }
+
+        function get_type_tag(x) {
+            switch (typeof(x)) {
+                case "number":
+                    //if (x.isInteger) {
+                    return "i";
+                    //} else {
+                    //    return "f";
+                    //}
+                case "string":
+                    return "s";
+                case "object":
+                    if (x instanceof Blob) {
+                        return "b";
+                    }
+                    default:
+                        console.log(`Invalid osc argument: ${x}`)
+                        return;
+            }
+        }
+
+        function serialise_osc_argument(x) {
+            switch (typeof(x)) {
+                case "number":
+                    //if (x.isInteger) {
+                    return serialise_osc_int(x);
+                    //} else {
+                    //    return serialise_osc_float(x);
+                    //}
+                case "string":
+                    return serialise_osc_string(x);
+                case "object":
+                    if (x instanceof Blob) {
+                        return serialise_osc_blob(x);
+                    }
+                    default:
+                        console.log(`Invalid osc argument: ${x}`)
+                        return;
+            }
+        }
+
+        WebSocket.prototype.send_osc = function({
+            address: address,
+            args: args
+        }) {
+            const address_data = serialise_osc_string(address);
+
+            const type_tags = "," + args.map(get_type_tag).join("");
+            const type_tags_data = serialise_osc_string(type_tags);
+
+            const args_data = new Blob(args.map(serialise_osc_argument));
+
+            this.send(new Blob([address_data, type_tags_data, args_data]));
+        }
+
+        var inputs = [];
+        var outputs = [];
+
+        var ws = null;
+
+        function create_output_header_cell(output) {
+            const cell = document.createElement("th");
+            cell.innerText = output;
+            return cell;
+        }
+
+        function create_header_row() {
+            const row = document.createElement("tr");
+            const top_left_cell = document.createElement("th");
+            top_left_cell.style.border = "none";
+            row.replaceChildren(
+                top_left_cell,
+                ...outputs.map(create_output_header_cell));
+            return row;
+        }
+
+        function create_matrix_cell(input, output) {
+            const cell = document.createElement("td");
+            const box = document.createElement("input");
+            box.id = `matrix ${input} ${output}`
+            box.type = "checkbox";
+            box.onchange = function(ev) {
+                ws.send_osc({
+                    address: "/matrix/connect",
+                    args: [input, output, box.checked ? 1 : 0]
+                })
+            }
+            cell.replaceChildren(box);
+            return cell;
+        }
+
+        function create_row_for_input(input) {
+            const row = document.createElement("tr");
+            const header_cell = document.createElement("th");
+            header_cell.class = "header_cell";
+            header_cell.add_osc_address = input;
+            header_cell.id = `header ${input}`;
+            header_cell.innerText = input;
+            row.replaceChildren(
+                header_cell,
+                ...outputs.map(output =>
+                    create_matrix_cell(input, output)));
+            return row;
+        }
+
+        function update_matrix() {
+            matrix.replaceChildren(create_header_row(), ...inputs.map(create_row_for_input));
+            matrix_view.style.opacity = "100%";
+
+            for (input of inputs) {
+                ws.send_osc({
+                    address: `/${input}/header_html`,
+                    args: []
+                });
+            }
+
+            for (input of inputs) {
+                for (output of outputs) {
+                    ws.send_osc({
+                        address: "/matrix/is_connected",
+                        args: [input, output]
+                    });
+                }
+            }
+        }
+
+        function set_detail_view(device) {
+            if (device == undefined) {
+                detail_view.style.width = "0vw";
+                detail_view.style.opacity = "0%";
+            } else {
+                detail_view.style.width = "100vw";
+                detail_view.style.opacity = "100%";
+
+                const node = document.createElement("div");
+                node.id = `detail ${device}`;
+                node.add_osc_address = device;
+                detail_view_contents.replaceChildren(node);
+
+                ws.send_osc({
+                    address: `/${input}/detail_html`,
+                    args: []
+                });
+            }
+        }
+
+        function open_detail_view(event) {
+            let node = event.target;
+            while (node.add_osc_address == undefined) {
+                node = node.parentNode;
+            }
+            set_detail_view(node.add_osc_address);
+        }
+
+        function send_osc(msg, event) {
+            let node = event.target;
+            while (node != undefined) {
+                if (node.add_osc_address != undefined) {
+                    msg.address = "/" + node.add_osc_address + msg.address;
+                }
+                node = node.parentNode;
+            }
+            ws.send_osc(msg);
+        }
+
+        connect.onclick = function() {
+            ws = new WebSocket(`ws://${window.location.host}`);
+            ws.binaryType = "arraybuffer";
+            ws.onopen = function(ev) {
+                ws.send_osc({
+                    address: "/matrix/inputs",
+                    args: []
+                });
+                ws.send_osc({
+                    address: "/matrix/outputs",
+                    args: []
+                });
+            };
+            ws.onclose = function(ev) {
+                matrix.replaceChildren();
+                matrix_view.style.opacity = "0%";
+                set_detail_view();
+            };
+            ws.onmessage = function(ev) {
+                const {
+                    address: address,
+                    args: args
+                } = parse_osc(new DataView(ev.data));
+
+                switch (address) {
+                    case "/matrix/inputs":
+                        inputs = args;
+                        update_matrix();
+                        break;
+                    case "/matrix/outputs":
+                        outputs = args;
+                        update_matrix();
+                        break;
+                    case "/matrix/is_connected":
+                        const [input, output, value] = args;
+                        const node =
+                            document.getElementById(`matrix ${input} ${output}`);
+                        if (node) {
+                            node.checked = value > 0;
+                        }
+                        break;
+                    default:
+                        const address_components = address.split("/");
+                        if (address.split("/")[2] == "header_html") {
+                            const [html] = args;
+                            const node =
+                                document.getElementById(`header ${address_components[1]}`);
+                            if (node) {
+                                node.innerHTML = html;
+                            }
+                        } else if (address.split("/")[2] == "detail_html") {
+                            const [html] = args;
+                            const node =
+                                document.getElementById(`detail ${address_components[1]}`);
+                            if (node) {
+                                node.innerHTML = html;
+                            }
+                        } else {
+                            console.log({
+                                address: address,
+                                args: args
+                            });
+                        }
+                        break;
+                }
+            };
+            ws.onerror = function(ev) {
+                _status.innerText = "Error";
+                console.log(ev);
+            };
+        };
+        disconnect.onclick = function() {
+            ws.close();
+        };
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,104 @@
+#  Copyright ⓒ 2018-2021 ThePhD.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+#  See https://github.com/ThePhD/out_ptr/blob/master/docs/out_ptr.adoc for documentation.
+
+---
+BasedOnStyle: WebKit
+IndentWidth: 5
+TabWidth: 5
+ContinuationIndentWidth: 5
+UseTab: Always
+
+# Namespaces
+NamespaceIndentation: All
+CompactNamespaces: true
+FixNamespaceComments: true
+
+# Overall Alignment
+ColumnLimit: 0
+AlignAfterOpenBracket: DontAlign # uses ContinuationIndentWidth for this instead
+AccessModifierOffset: -5 # do not push public: or private: around
+AlignConsecutiveAssignments: true # affects more than what's expected: do not use
+#AlignConsecutiveDeclarations: true # affects more than what's expected: do not use
+
+# Type Alignment
+DerivePointerAlignment: false
+PointerAlignment: Left
+AlwaysBreakTemplateDeclarations: true
+AlwaysBreakBeforeMultilineStrings: true
+
+# Comments
+AlignTrailingComments: true
+ReflowComments: true
+
+# Macros
+AlignEscapedNewlines: Left
+#IndentPPDirectives: None
+
+# Functions
+AllowShortFunctionsOnASingleLine: None
+AlwaysBreakAfterReturnType: None
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerIndentWidth: 0
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+BinPackArguments: true
+BinPackParameters: true
+
+# Classes
+BreakBeforeInheritanceComma: false
+
+# Braces
+Cpp11BracedListStyle: false
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterEnum: false
+  AfterStruct: false
+  AfterControlStatement: false
+  AfterClass: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeElse: true
+  BeforeCatch: true
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: true
+
+# Control Statements
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+IndentCaseLabels: false
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpacesInCStyleCastParentheses: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+MaxEmptyLinesToKeep: 3
+
+# OCD
+SortUsingDeclarations: true
+SortIncludes: false
+
+---
+Language: Cpp
+Standard: Cpp11
