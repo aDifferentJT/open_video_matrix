@@ -49,17 +49,17 @@ jobs:
         7z x cef.tar
         echo "CEF_ROOT=$(${PWD}.ToString().Replace("\","/"))/cef_binary_93.1.11+g9e254fa+chromium-93.0.4577.63_windows64_minimal" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
-    - name: Install boost and libfmt (Linux)
+    - name: Install boost, range-v3 and libfmt (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install libboost-dev libfmt-dev
+        sudo apt-get install libboost-dev librange-v3-dev libfmt-dev
 
-    - name: Install boost and libfmt (macOS)
+    - name: Install boost, range-v3 and libfmt (macOS)
       if: runner.os == 'macOS'
       run: |
         brew update
-        brew install boost fmt
+        brew install boost range-v3 fmt
 
     - name: Install boost (Windows)
       if: runner.os == 'Windows'
@@ -68,6 +68,11 @@ jobs:
         curl -L -o boost.7z https://boostorg.jfrog.io/artifactory/main/release/1.77.0/source/boost_1_77_0.7z
         7z x boost.7z
         mv boost_1_77_0/boost .
+
+    - name: Install range-v3 (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        vcpkg install range-v3
       
     - name: Install fmt (Windows)
       if: runner.os == 'Windows'
