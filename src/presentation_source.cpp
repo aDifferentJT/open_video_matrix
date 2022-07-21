@@ -76,8 +76,9 @@ void convert_slide(Magick::Image &img, triple_buffer::buffer &buffer,
                    thumbnail &thumbnail_) {
   try {
     img.resize({1920, 1080});
-    img.extent({1920, 1080}, Magick::Color(0, 0, 0, 0),
-               Magick::CenterGravity);
+    auto bg_colour = Magick::ColorRGB(0, 0, 0);
+    bg_colour.alpha(0);
+    img.extent({1920, 1080}, bg_colour, Magick::CenterGravity);
     img.write(0, 0, 1920, 1080, "BGRA", Magick::CharPixel, buffer.data());
 
     img.resize({192, 108});
