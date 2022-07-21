@@ -129,17 +129,10 @@ jobs:
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest -C ${{env.BUILD_TYPE}}
 
-    - name: Get executable (non-Windows)
-      if: runner.os != 'Windows'
+    - name: Get executables
       run: |
         mkdir release
-        cp build/open_video_matrix release/open_video_matrix_${{runner.os}}
-
-    - name: Get executable (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        mkdir release
-        cp build/Release/open_video_matrix.exe release/open_video_matrix_${{runner.os}}.exe
+        cp -r build/src/* release/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v2
