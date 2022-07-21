@@ -54,7 +54,7 @@ jobs:
       run: |
         7z x cef.tar.bz2
         7z x cef.tar
-        echo "CEF_ROOT=$(${PWD}.ToString().Replace("\","/"))/cef_binary_103.0.12%2Bg8eb56c7%2Bchromium-103.0.5060.134_windows64_minimal" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+        echo "CEF_ROOT=$(${PWD}.ToString().Replace("\","/"))/cef_binary_103.0.12+g8eb56c7+chromium-103.0.5060.134_windows64_minimal" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
     - name: Install boost, range-v3, libfmt, imagemagick (Linux)
       if: runner.os == 'Linux'
