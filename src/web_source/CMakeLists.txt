@@ -45,9 +45,7 @@ set(CEFSIMPLE_SRCS_MAC
   main.mm
   )
 set(CEFSIMPLE_SRCS_WINDOWS
-  keyfillwebview.rc
   main.cpp
-  resource.h
   )
 APPEND_PLATFORM_SOURCES(CEFSIMPLE_SRCS)
 source_group(web_source FILES ${CEFSIMPLE_SRCS})

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <regex>
 #include <thread>
@@ -153,7 +154,7 @@ public:
   std::vector<std::unique_ptr<input_device>> inputs;
   std::vector<std::unique_ptr<output_device>> outputs;
 
-  std::function<void()> reload_clients = []{};
+  std::function<void()> reload_clients = [] {};
 
 private:
   struct has_name {
@@ -320,7 +321,56 @@ public:
   }
 };
 
-int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
+void parse_io_devices(std::istream &is, auto const &add) {
+  auto regex = std::regex{R"(([^:]*): (.*))"};
+
+  auto line = std::string{};
+  while ([&] {
+    std::getline(is, line);
+    return line != "";
+  }()) {
+    if (std::smatch match; std::regex_match(line, match, regex)) {
+      if (match.size() == 3) {
+        add(match[1].str(), match[2].str());
+      }
+    }
+  }
+}
+
+void parse_inputs(std::istream &is, matrix &matrix_) {
+  parse_io_devices(is, [&](std::string name, std::string executable) {
+    matrix_.add_input(std::move(name), std::move(executable));
+  });
+}
+
+void parse_outputs(std::istream &is, matrix &matrix_) {
+  parse_io_devices(is, [&](std::string name, std::string executable) {
+    matrix_.add_output(std::move(name), std::move(executable));
+  });
+}
+
+void parse_connections(std::istream &is, matrix &matrix_) {
+  auto regex = std::regex{R"(([^&]*) & ([^&]*))"};
+
+  auto line = std::string{};
+  while ([&] {
+    std::getline(is, line);
+    return line != "";
+  }()) {
+    if (std::smatch match; std::regex_match(line, match, regex)) {
+      if (match.size() == 3) {
+        matrix_.connect(match[1].str(), match[2].str());
+      }
+    }
+  }
+}
+
+int main([[maybe_unused]] int argc, char **argv) {
+  if (argc != 2) {
+    std::cerr << "Needs path to config file\n";
+    std::terminate();
+  }
+
   auto matrix_ = matrix{};
 
   auto http_delegate_ = std::make_shared<http_delegate>(matrix_);
@@ -330,18 +380,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
 
   matrix_.reload_clients = [&] { server_.send(""s); };
 
-  matrix_.add_input(
-      "web_source 1",
-      "./web_source/Release/web_source.app/Contents/MacOS/web_source");
-  matrix_.add_input(
-      "web_source 2",
-      "./web_source/Release/web_source.app/Contents/MacOS/web_source");
-  matrix_.add_input("colour_source", "./colour_source");
-  matrix_.add_input("presentation_source", "./presentation_source");
-  matrix_.add_output("ndi_output", "./ndi_output");
-  matrix_.add_output("decklink_output", "./decklink_output");
-
-  matrix_.connect("web_source 1", "ndi_output");
+  auto config_file = std::ifstream{argv[1]};
+  parse_inputs(config_file, matrix_);
+  parse_outputs(config_file, matrix_);
+  parse_connections(config_file, matrix_);
 
   matrix_.run();
 

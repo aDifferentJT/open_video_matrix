@@ -1,0 +1,11 @@
+web_source 1: ./web_source/Release/web_source.app/Contents/MacOS/web_source
+web_source 2: ./web_source/Release/web_source.app/Contents/MacOS/web_source
+colour_source: ./colour_source
+presentation_source: ./presentation_source
+
+decklink_output 1: ./decklink_output
+decklink_output 2: ./decklink_output
+ndi_output: ./ndi_output
+
+web_source 1 & decklink_output 1
+web_source 2 & decklink_output 2
