@@ -109,7 +109,8 @@ auto string_response(
 
 template <typename Body, typename Allocator>
 auto empty_response(
-    beast::http::request<Body, beast::http::basic_fields<Allocator>> const &req) {
+    beast::http::request<Body, beast::http::basic_fields<Allocator>> const
+        &req) {
   auto res = beast::http::response<beast::http::empty_body>{
       beast::http::status::ok, req.version()};
   res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
@@ -120,9 +121,7 @@ auto empty_response(
 template <typename T>
 concept delegate = requires(
     T delegate,
-    beast::http::request<typename T::body_type,
-                         beast::http::basic_fields<std::allocator<void>>>
-        req) {
+    beast::http::request<typename T::body_type, beast::http::fields> req) {
   delegate.handle_request(req, [](auto &&) {});
 };
 
@@ -149,7 +148,7 @@ class session {
     auto &parser = self->parser_;
 
     parser.emplace();
-    //parser->body_limit(1 << 30); // 1 GiB
+    // parser->body_limit(1 << 30); // 1 GiB
     parser->body_limit(boost::none);
 
     // Set the timeout.
