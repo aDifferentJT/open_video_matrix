@@ -118,12 +118,13 @@ auto empty_response(
   return res;
 }
 
+// TODO fix this in a gcc compatible way
 template <typename T>
-concept delegate = requires(
+concept delegate = true; /*requires(
     T delegate,
     beast::http::request<typename T::body_type, beast::http::fields> req) {
   delegate.handle_request(req, [](auto &&) {});
-};
+};*/
 
 template <delegate Delegate, websocket::delegate WebsocketDelegate>
 class session {
