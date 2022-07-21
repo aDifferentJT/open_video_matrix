@@ -13,7 +13,7 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 set(Boost_USE_STATIC_LIBS OFF)
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
-find_package(Boost 1.78.0 COMPONENTS ALL)
+find_package(Boost 1.71.0 COMPONENTS ALL)
 include_directories(${Boost_INCLUDE_DIRS})
 
 add_definitions(-DMAGICKCORE_QUANTUM_DEPTH=8)

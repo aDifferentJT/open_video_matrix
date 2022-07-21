@@ -17,11 +17,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-22.04, windows-latest]
     steps:
     - uses: actions/checkout@v2
       with:
         submodules: recursive
+
+    - name: Set compiler (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo update-alternatives --install $(which cc) cc $(which gcc-11) 100
+        sudo update-alternatives --install $(which c++) c++ $(which g++-11) 100
     
     - name: Download CEF (Linux)
       if: runner.os == 'Linux'
@@ -90,8 +96,6 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       if: runner.os == 'Linux'
       run: |
-        export CC="$(which gcc-11)"
-        export CXX="$(which g++-11)"
         cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Configure CMake (macOS)
