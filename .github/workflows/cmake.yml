@@ -26,8 +26,9 @@ jobs:
     - name: Set compiler (Linux)
       if: runner.os == 'Linux'
       run: |
-        sudo update-alternatives --install $(which cc) cc $(which gcc-11) 100
-        sudo update-alternatives --install $(which c++) c++ $(which g++-11) 100
+        # TODO it'd be better to use gcc on linux for variety
+        sudo update-alternatives --install $(which cc) cc $(which clang-14) 100
+        sudo update-alternatives --install $(which c++) c++ $(which clang++-14) 100
     
     - name: Download CEF (Linux)
       if: runner.os == 'Linux'
