@@ -35,7 +35,7 @@ include_directories(decklink/${PLATFORM}/include)
 
 if (CMAKE_SYSTEM_NAME MATCHES Windows)
   # Use FindIDL
-  list(APPEND CMAKE_MODULE_PATH "FindIDL/cmake")
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../FindIDL/cmake")
   find_package(IDL REQUIRED)
 endif()
 
