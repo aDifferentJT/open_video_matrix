@@ -60,6 +60,10 @@ if (APPLE)
   target_link_libraries(decklink_output ${FOUNDATION})
 endif()
 if (CMAKE_SYSTEM_NAME MATCHES Windows)
+  # Use FindIDL
+  list(APPEND CMAKE_MODULE_PATH "FindIDL/cmake")
+  find_package(IDL REQUIRED)
+
   add_idl(DeckLinkAPI decklink/Win/include/DeckLinkAPI.idl)
   target_link_libraries(decklink_output DeckLinkAPI)
 endif()
