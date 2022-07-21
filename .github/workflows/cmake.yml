@@ -65,9 +65,9 @@ jobs:
       if: runner.os == 'Windows'
       working-directory: "C:/Program Files"
       run: |
-        curl -L -o boost.7z https://boostorg.jfrog.io/artifactory/main/release/1.77.0/source/boost_1_77_0.7z
+        curl -L -o boost.7z https://boostorg.jfrog.io/artifactory/main/release/1.77.0/source/boost_1_78_0.7z
         7z x boost.7z
-        mv boost_1_77_0/boost .
+        mv boost_1_78_0/boost .
 
     - name: Install range-v3 (Windows)
       if: runner.os == 'Windows'
