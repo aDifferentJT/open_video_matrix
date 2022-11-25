@@ -42,12 +42,15 @@ public:
     auto path = dir + NDILIB_LIBRARY_NAME;
 
 #if defined(UNIX)
-    dl = dlopen(path.c_str(), 0);
+    dl = dlopen(path.c_str(), RTLD_LAZY);
 #elif defined(WIN32)
     dl = LoadLibraryA(path.c_str());
 #endif
     if (!dl) {
-      std::cerr << "Can't find NDI lib\n";
+      std::cerr << "Can't find NDI lib, expected at: " << path << '\n';
+#if defined(UNIX)
+      std::cerr << "Error: " << dlerror() << '\n';
+#endif
 #if defined(WIN32)
       MessageBox(nullptr, CA2T(path.c_str()), L"Can't find NDI lib", MB_OK);
 #endif

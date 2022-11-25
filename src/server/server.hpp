@@ -12,15 +12,11 @@
 #include <unordered_set>
 #include <vector>
 
-template <http::delegate HttpDelegate, websocket::delegate WebsocketDelegate>
-class server {
+template <http::delegate HttpDelegate> class server {
 private:
   std::vector<std::thread> workers;
 
   net::io_context ioc;
-
-  synchronised<std::unordered_set<websocket::session<WebsocketDelegate> *>>
-      clients;
 
   unsigned short port_;
 
@@ -28,14 +24,15 @@ public:
   server(server const &) = delete;
 
   server(std::shared_ptr<HttpDelegate> http_delegate,
-         std::shared_ptr<WebsocketDelegate> websocket_delegate,
-         char const *address_, unsigned short port = 0, std::size_t no_threads = 4) {
+         std::shared_ptr<websocket::delegate> websocket_delegate,
+         char const *address_, unsigned short port = 0,
+         std::size_t no_threads = 4) {
     auto address = net::ip::make_address(address_);
 
-    auto listener_ = listener::create(ioc, tcp::endpoint{address, port});
+    auto listener_ = listener::create(ioc, {address, port});
     port_ = listener_->local_endpoint().port();
     listener::run(std::move(http_delegate), std::move(websocket_delegate), ioc,
-                  std::move(listener_), clients);
+                  std::move(listener_));
 
     workers.reserve(no_threads);
     for (std::size_t i = 0; i < no_threads; i += 1) {
@@ -53,13 +50,13 @@ public:
 
   auto port() { return port_; }
 
-  void send(std::string msg) {
-    auto shared_msg = std::make_shared<std::string const>(std::move(msg));
-
-    auto locked_clients = clients.lock();
-    for (auto client : locked_clients.get()) {
-      websocket::send(client->shared_from_this(), shared_msg);
-    }
+  auto connect_to_websocket(std::shared_ptr<websocket::delegate> _delegate,
+                            char const *address, unsigned short port,
+                            std::string_view target, std::any user_data = {})
+      -> std::shared_ptr<websocket::session> {
+    return websocket::connect_to_server(std::move(_delegate),
+                                        {net::ip::make_address(address), port},
+                                        target, ioc, std::move(user_data));
   }
 };
 

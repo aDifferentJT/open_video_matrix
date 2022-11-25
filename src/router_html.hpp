@@ -12,13 +12,28 @@ using fmt::operator""_a;
 
 using namespace std::literals;
 
+auto ignore_first(auto &&, auto &&x) -> decltype(auto) { return x; }
+
 struct device_header_cell {
+public:
   std::string const &name;
   unsigned short port;
 
+private:
+  static inline auto const empty_name = ""s;
+  device_header_cell(auto const &, int) : name{empty_name}, port{0} {}
+
+public:
+  template <typename Device>
+  device_header_cell(Device const &dev) : name{dev.name()}, port{dev.port()} {}
+
   static constexpr auto make =
-      []<typename Device>(std::unique_ptr<Device> const &dev) {
-        return device_header_cell{dev->name(), dev->port()};
+      []<typename Device>(std::weak_ptr<Device> const &_dev) {
+        if (auto dev = _dev.lock()) {
+          return device_header_cell{*dev};
+        } else {
+          return device_header_cell{_dev, 0};
+        }
       };
 };
 
@@ -31,31 +46,49 @@ template <> struct fmt::formatter<device_header_cell> {
 
   auto format(device_header_cell const &dev, auto &ctx) const
       -> decltype(ctx.out()) {
-    auto iframe_id = fmt::format("input_header_iframe_{}", dev.name);
+    auto iframe_id = fmt::format("header_iframe_{}", dev.name);
     return fmt::format_to(ctx.out(), R"html(
 <th>
-  <h3>{name}</h3>
-  <iframe id="{iframe_id}">
+  <iframe class="header_iframe" id="{iframe_id}">
   </iframe>
   <script>
     document.getElementById("{iframe_id}").src = `http://${{window.location.hostname}}:{port}`;
   </script>
 </th>
 )html",
-                          "iframe_id"_a = iframe_id, "name"_a = dev.name,
-                          "port"_a = dev.port);
+                          "iframe_id"_a = iframe_id, "port"_a = dev.port);
   }
 };
 
-struct matrix_cell {
-  input_device const &input;
-  output_device const &output;
+class matrix_cell {
+private:
+  struct data_t {
+    input_device const &input;
+    output_device const &output;
+
+    data_t(input_device const &input, output_device const &output)
+        : input{input}, output{output} {}
+  };
+
+  std::optional<data_t> data;
+
+public:
+  matrix_cell() = default;
+
+  matrix_cell(input_device const &input, output_device const &output)
+      : data{std::in_place, input, output} {}
 
   static constexpr auto make(input_device const &input) {
-    return [&input](std::unique_ptr<output_device> const &output) {
-      return matrix_cell{input, *output};
+    return [&input](std::weak_ptr<output_device> const &_output) {
+      if (auto output = _output.lock()) {
+        return matrix_cell{input, *output};
+      } else {
+        return matrix_cell{};
+      }
     };
   }
+
+  template <typename, typename, typename> friend struct fmt::formatter;
 };
 
 template <> struct fmt::formatter<matrix_cell> {
@@ -66,11 +99,15 @@ template <> struct fmt::formatter<matrix_cell> {
   }
 
   auto format(matrix_cell const &cell, auto &ctx) const -> decltype(ctx.out()) {
-    auto checked =
-        std::find(cell.input.outputs.begin(), cell.input.outputs.end(),
-                  &cell.output) != cell.input.outputs.end();
-    return fmt::format_to(ctx.out(),
-                          R"html(
+    if (cell.data) {
+      auto checked =
+          std::find_if(cell.data->input.outputs.begin(),
+                       cell.data->input.outputs.end(),
+                       [&](std::weak_ptr<output_device> const &output) {
+                         return output.lock().get() == &cell.data->output;
+                       }) != cell.data->input.outputs.end();
+      return fmt::format_to(ctx.out(),
+                            R"html(
 <td>
   <input
     type="checkbox"
@@ -79,15 +116,36 @@ template <> struct fmt::formatter<matrix_cell> {
   />
 </td>
 )html",
-                          "checked"_a = checked ? "checked"sv : ""sv,
-                          "input"_a = cell.input.name(),
-                          "output"_a = cell.output.name());
+                            "checked"_a = checked ? "checked"sv : ""sv,
+                            "input"_a = cell.data->input.name(),
+                            "output"_a = cell.data->output.name());
+    } else {
+      return fmt::format_to(ctx.out(), "");
+    }
   }
 };
 
-struct input_row {
-  input_device const &input;
-  std::vector<std::unique_ptr<output_device>> const &outputs;
+class input_row {
+private:
+  struct data_t {
+    input_device const &input;
+    std::vector<std::weak_ptr<output_device>> const &outputs;
+
+    data_t(input_device const &input,
+           std::vector<std::weak_ptr<output_device>> const &outputs)
+        : input{input}, outputs{outputs} {}
+  };
+
+  std::optional<data_t> data;
+
+public:
+  input_row() = default;
+
+  input_row(input_device const &input,
+            std::vector<std::weak_ptr<output_device>> const &outputs)
+      : data{std::in_place, input, outputs} {}
+
+  template <typename, typename, typename> friend struct fmt::formatter;
 };
 
 template <> struct fmt::formatter<input_row> {
@@ -98,18 +156,42 @@ template <> struct fmt::formatter<input_row> {
   }
 
   auto format(input_row const &row, auto &ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(
-        ctx.out(),
-        R"html(
+    if (row.data) {
+      return fmt::format_to(
+          ctx.out(),
+          R"html(
 <tr>
+  <th>
+    <table>
+      <tr>
+        <td style="border: none;">
+          <button onclick="fetch('/bring_input_backward', {{method: 'POST', body: '{name}'}})">
+            &#11165;
+          </button>
+        </td>
+      </tr>
+      <tr>
+        <td style="border: none;">
+          <button onclick="fetch('/bring_input_forward', {{method: 'POST', body: '{name}'}})">
+            &#11167;
+          </button>
+        </td>
+      </tr>
+    </table>
+  </th>
   {header}
   {cells}
 </tr>
 )html",
-        "header"_a = device_header_cell{row.input.name(), row.input.port()},
-        "cells"_a = fmt::join(row.outputs | ranges::views::transform(
-                                                matrix_cell::make(row.input)),
-                              ""));
+          "name"_a = std::string{row.data->input.name()},
+          "header"_a = device_header_cell{row.data->input},
+          "cells"_a = fmt::join(
+              row.data->outputs |
+                  ranges::views::transform(matrix_cell::make(row.data->input)),
+              ""));
+    } else {
+      return fmt::format_to(ctx.out(), "");
+    }
   }
 };
 
@@ -127,17 +209,16 @@ constexpr auto router_html = R"html(
 
       th,
       td {{
-        padding: 5px;
+        padding: 0px;
         border: 1px solid;
         text-align: center;
         vertical-align: middle;
-        max-height: 200px;
-        overflow-y: scroll;
       }}
 
-      .header_cell {{
-        max-height: 200px;
-        overflow-y: scroll;
+      .header_iframe {{
+        width: 300px;
+        height: 200px;
+        border: none;
       }}
 
       #container {{
@@ -206,7 +287,8 @@ constexpr auto router_html = R"html(
         <div id="matrix_view">
           <table id="matrix">
             <tr>
-              <th style="border:none;"></th>
+              <th style="border: none;"></th>
+              <th style="border: none;"></th>
               {output_headers}
             </tr>
             {input_rows}

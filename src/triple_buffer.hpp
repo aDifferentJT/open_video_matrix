@@ -12,7 +12,10 @@ namespace ipc = boost::interprocess;
 
 class triple_buffer {
 public:
-  static constexpr auto size = 1920 * 1080 * 4;
+  static constexpr auto width = 1920;
+  static constexpr auto pitch = width * 4;
+  static constexpr auto height = 1080;
+  static constexpr auto size = pitch * height;
   using buffer = std::array<uint8_t, size>;
 
 private:
@@ -29,7 +32,10 @@ public:
       : buffers{}, _read{&buffers[0]}, read_next{&buffers[0]},
         _write{&buffers[1]}, write_next{&buffers[2]} {}
 
-  auto novel_to_read() { return _read != read_next; }
+  auto novel_to_read() {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return _read != read_next;
+  }
 
   void about_to_read() {
     auto lock = ipc::scoped_lock{mutex};
@@ -37,10 +43,12 @@ public:
       write_next = _read;
     }
     _read = read_next;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
   }
 
   void done_writing() {
     auto lock = ipc::scoped_lock{mutex};
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     read_next = _write;
     std::swap(_write, write_next);
   }

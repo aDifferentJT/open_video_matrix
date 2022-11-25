@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <regex>
 #include <thread>
@@ -24,7 +25,6 @@ namespace ipc = boost::interprocess;
 using fmt::operator""_a;
 
 void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
-#pragma omp parallel for schedule(static)
   for (std::size_t i = 0; i < triple_buffer::size; i += 4) {
     // Div by 256 is much cheaper, so factor should range from 1 to 256
     // mult by 1 div by 256 will be 0
@@ -38,71 +38,21 @@ void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
 
 class io_device {
 private:
-  std::string _name;
+  unsigned short _port;
 
-  std::atomic<triple_buffer *> buffer = nullptr;
-  std::atomic<std::atomic<unsigned short> *> _port = nullptr;
-  std::atomic<std::atomic<bool> *> alive = nullptr;
-
-  std::thread watchdog;
+  ipc_managed_object<triple_buffer> buffer;
 
 public:
   io_device(io_device const &) = delete;
   io_device(io_device &&) = delete;
 
-  // TODO other args, ownership difficult
-  io_device(std::string_view name, std::string executable)
-      : _name{std::move(name)}, watchdog{[this, executable =
-                                                    std::move(executable)]() {
-          auto buffer = ipc_managed_object<triple_buffer>{};
-          auto port = std::atomic<unsigned short>{0};
-          auto alive = std::atomic<bool>{true};
-          this->buffer = buffer.data();
-          this->_port = &port;
-          this->alive = &alive;
+  io_device(unsigned short port) : _port{port} {}
 
-          auto is = boost::process::ipstream{};
-          auto os = boost::process::opstream{};
+  auto name() const -> std::string const & { return buffer.name(); }
+  auto port() const -> unsigned short { return _port; }
 
-          // Henceforth only use things owned by the thread
-          [&buffer, &port, &alive, &executable, &is, &os] {
-            while (alive) {
-              try {
-                auto p = boost::process::child{
-                    executable.c_str(), buffer.name().c_str(),
-                    boost::process::std_out > is, boost::process::std_in < os};
-                {
-                  unsigned short _port;
-                  is >> _port;
-                  port = _port;
-                }
-                // TODO reload_clients();
-                p.wait();
-              } catch (boost::process::process_error const &e) {
-                std::cerr << "Error in " << executable << ": " << e.what()
-                          << '\n';
-              }
-              std::this_thread::sleep_for(1s);
-            }
-          }();
-        }} {
-    // TODO a barrier would be a better choice here
-    while (buffer == nullptr || _port == nullptr || alive == nullptr)
-      ;
-    watchdog.detach();
-  }
-
-  ~io_device() {
-    if (alive != nullptr) {
-      *alive = false;
-    }
-  }
-
-  auto name() const -> std::string const & { return _name; }
-  auto port() const -> unsigned short { return *_port; }
-
-  auto operator->() const -> triple_buffer const * { return buffer; }
-  auto operator->() -> triple_buffer * { return buffer; }
+  auto operator->() const -> triple_buffer const * { return buffer.data(); }
+  auto operator->() -> triple_buffer * { return buffer.data(); }
 };
 
 class output_device {
@@ -125,7 +75,7 @@ private:
   io_device device;
 
 public:
-  std::vector<output_device *> outputs;
+  std::vector<std::weak_ptr<output_device>> outputs;
 
   input_device(auto &&...args)
       : device{std::forward<decltype(args)>(args)...} {}
@@ -136,23 +86,32 @@ public:
   void about_to_read() { device->about_to_read(); }
   auto read() const -> triple_buffer::buffer const & { return device->read(); }
 
-  auto has_output(output_device *output) -> bool {
-    return std::find(outputs.begin(), outputs.end(), output) != outputs.end();
+  auto has_output(output_device const *output) -> bool {
+    for (auto &output2 : outputs) {
+      if (output == output2.lock().get()) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  void add_output(output_device *output) {
-    if (!has_output(output)) {
+  void add_output(std::shared_ptr<output_device> output) {
+    if (!has_output(output.get())) {
       outputs.push_back(output);
     }
   }
 
-  void remove_output(output_device *output) { std::erase(outputs, output); }
+  void remove_output(output_device const *output) {
+    std::erase_if(outputs, [&](std::weak_ptr<output_device> const &output2) {
+      return output == output2.lock().get();
+    });
+  }
 };
 
 class matrix {
 public:
-  std::vector<std::unique_ptr<input_device>> inputs;
-  std::vector<std::unique_ptr<output_device>> outputs;
+  std::vector<std::weak_ptr<input_device>> inputs;
+  std::vector<std::weak_ptr<output_device>> outputs;
 
   std::function<void()> reload_clients = [] {};
 
@@ -161,68 +120,103 @@ private:
     std::string_view name;
 
     auto operator()(auto const &device) -> bool {
-      return device->name() == name;
+      return device.lock()->name() == name;
     }
   };
 
-  auto find_input(std::string_view name) {
-    return std::find_if(inputs.begin(), inputs.end(), has_name{name});
+  auto find_input(std::string_view name) -> std::shared_ptr<input_device> {
+    auto input = std::find_if(inputs.begin(), inputs.end(), has_name{name});
+    if (input == inputs.end()) {
+      return {};
+    } else {
+      return input->lock();
+    }
   }
 
-  auto find_output(std::string_view name) {
-    return std::find_if(outputs.begin(), outputs.end(), has_name{name});
+  auto find_output(std::string_view name) -> std::shared_ptr<output_device> {
+    auto output = std::find_if(outputs.begin(), outputs.end(), has_name{name});
+    if (output == outputs.end()) {
+      return {};
+    } else {
+      return output->lock();
+    }
   }
 
 public:
-  void add_input(auto &&...args) {
-    inputs.push_back(
-        std::make_unique<input_device>(std::forward<decltype(args)>(args)...));
+  void add_input(std::weak_ptr<input_device> input) {
+    inputs.push_back(std::move(input));
   }
 
-  void add_output(auto &&...args) {
-    auto &output = outputs.emplace_back(
-        std::make_unique<output_device>(std::forward<decltype(args)>(args)...));
-    output->write() = {};
-    output->done_writing();
+  void add_output(std::weak_ptr<output_device> _output) {
+    if (auto output = _output.lock()) {
+      output->write() = {};
+      output->done_writing();
+      outputs.push_back(output);
+    }
   }
 
   void remove_input(std::string_view name) {
-    auto input = find_input(name);
-    if (input == inputs.end()) {
-      std::cerr << "Invalid input: " << name << '\n';
+    if (auto input = find_input(name)) {
+      std::erase_if(inputs, [&](std::weak_ptr<input_device> const &input2) {
+        return input == input2.lock();
+      });
     } else {
-      inputs.erase(input);
+      std::cerr << "Invalid input: " << name << '\n';
     }
   }
 
   void remove_output(std::string_view name) {
-    auto output = find_output(name);
-    if (output == outputs.end()) {
-      std::cerr << "Invalid output: " << name << '\n';
-    } else {
-      for (auto &input : inputs) {
-        input->remove_output(output->get());
+    if (auto output = find_output(name)) {
+      for (auto &_input : inputs) {
+        if (auto input = _input.lock()) {
+          input->remove_output(output.get());
+        }
       }
-      outputs.erase(output);
+      std::erase_if(outputs, [&](std::weak_ptr<output_device> const &output2) {
+        return output == output2.lock();
+      });
+    } else {
+      std::cerr << "Invalid output: " << name << '\n';
     }
+  }
+
+  void bring_input_forward(std::string_view name) {
+    auto input = std::find_if(inputs.begin(), inputs.end(), has_name{name});
+    if (input != inputs.end() && input + 1 != inputs.end()) {
+      std::swap(*input, *(input + 1));
+    }
+    reload_clients();
+  }
+
+  void bring_input_backward(std::string_view name) {
+    auto input = std::find_if(inputs.begin(), inputs.end(), has_name{name});
+    if (input != inputs.end() && input != inputs.begin()) {
+      std::swap(*input, *(input - 1));
+    }
+    reload_clients();
   }
 
   auto is_connected(std::string_view input_name, std::string_view output_name)
       -> bool {
     auto input = find_input(input_name);
     auto output = find_output(output_name);
-    if (input == inputs.end() && output == outputs.end()) {
-      std::cerr << "Invalid input: " << input_name
-                << " and output: " << output_name << '\n';
-      return false;
-    } else if (input == inputs.end()) {
-      std::cerr << "Invalid input: " << input_name << '\n';
-      return false;
-    } else if (output == outputs.end()) {
-      std::cerr << "Invalid output: " << output_name << '\n';
-      return false;
+
+    if (input) {
+      if (output) {
+        return input->has_output(output.get());
+      } else {
+        std::cerr << "Invalid output: " << output_name << '\n';
+        return false;
+      }
     } else {
-      return (*input)->has_output(output->get());
+      if (output) {
+        std::cerr << "Invalid input: " << input_name << '\n';
+        return false;
+      } else {
+        std::cerr << "Invalid input: " << input_name
+                  << " and output: " << output_name << '\n';
+        return false;
+      }
     }
   }
 
@@ -230,37 +224,75 @@ public:
                bool value = true) {
     auto input = find_input(input_name);
     auto output = find_output(output_name);
-    if (input == inputs.end() && output == outputs.end()) {
-      std::cerr << "Invalid input: " << input_name
-                << " and output: " << output_name << '\n';
-    } else if (input == inputs.end()) {
-      std::cerr << "Invalid input: " << input_name << '\n';
-    } else if (output == outputs.end()) {
-      std::cerr << "Invalid output: " << output_name << '\n';
-    } else if (value) {
-      (*input)->add_output(output->get());
+
+    if (input) {
+      if (output) {
+        if (value) {
+          input->add_output(output);
+        } else {
+          input->remove_output(output.get());
+        }
+      } else {
+        std::cerr << "Invalid output: " << output_name << '\n';
+      }
     } else {
-      (*input)->remove_output(output->get());
+      if (output) {
+        std::cerr << "Invalid input: " << input_name << '\n';
+      } else {
+        std::cerr << "Invalid input: " << input_name
+                  << " and output: " << output_name << '\n';
+      }
     }
+
     reload_clients();
   }
 
-  void run() {
+  void run(auto duration) {
+    auto nextFrame = std::chrono::steady_clock::time_point{};
+
     while (true) {
-      for (auto &output : outputs) {
-        output->write() = {};
+      nextFrame = std::chrono::steady_clock::now() + duration;
+
+      std::erase_if(inputs, [](std::weak_ptr<input_device> const &input) {
+        return input.expired();
+      });
+      std::erase_if(outputs, [](std::weak_ptr<output_device> const &output) {
+        return output.expired();
+      });
+      for (auto &_input : inputs) {
+        if (auto input = _input.lock()) {
+          std::erase_if(input->outputs,
+                        [](std::weak_ptr<output_device> const &output) {
+                          return output.expired();
+                        });
+        }
       }
-      for (auto &input : inputs) {
-        if (!input->outputs.empty()) {
-          input->about_to_read();
-          for (auto &output : input->outputs) {
-            alpha_over(output->write(), input->read());
+      // TODO if anything was erased, reload
+
+      for (auto &_output : outputs) {
+        if (auto output = _output.lock()) {
+          output->write() = {};
+        }
+      }
+      for (auto &_input : inputs) {
+        if (auto input = _input.lock()) {
+          if (!input->outputs.empty()) {
+            input->about_to_read();
+            for (auto &_output : input->outputs) {
+              if (auto output = _output.lock()) {
+                alpha_over(output->write(), input->read());
+              }
+            }
           }
         }
       }
-      for (auto &output : outputs) {
-        output->done_writing();
+      for (auto &_output : outputs) {
+        if (auto output = _output.lock()) {
+          output->done_writing();
+        }
       }
+
+      std::this_thread::sleep_until(nextFrame);
     }
   }
 };
@@ -285,16 +317,26 @@ struct http_delegate {
               fmt::join(matrix_.outputs |
                             ranges::views::transform(device_header_cell::make),
                         ""),
-          "input_rows"_a = fmt::join(
-              matrix_.inputs |
-                  ranges::views::transform(
-                      [&](std::unique_ptr<input_device> const &input) {
-                        return input_row{*input, matrix_.outputs};
-                      }),
-              ""));
+          "input_rows"_a =
+              fmt::join(matrix_.inputs |
+                            ranges::views::transform(
+                                [&](std::weak_ptr<input_device> const &_input) {
+                                  if (auto input = _input.lock()) {
+                                    return input_row{*input, matrix_.outputs};
+                                  } else {
+                                    return input_row{};
+                                  }
+                                }),
+                        ""));
       auto mime_type = "text/html"sv;
 
       return http::string_response(req, std::move(body), mime_type, send);
+    } else if (req.target() == "/bring_input_forward") {
+      matrix_.bring_input_forward(req.body());
+      return send(http::empty_response(req));
+    } else if (req.target() == "/bring_input_backward") {
+      matrix_.bring_input_backward(req.body());
+      return send(http::empty_response(req));
     } else if (req.target() == "/connect") {
       auto regex = std::regex{"([^&]*)&([^&]*)&(true|false)"};
       auto body = std::string{req.body()};
@@ -314,81 +356,47 @@ struct http_delegate {
   }
 };
 
-class websocket_delegate {
+class websocket_delegate : public websocket::tracking_delegate {
+private:
+  matrix &_matrix;
+
 public:
-  void on_read(beast::flat_buffer &buffer) {
-    // TODO
+  websocket_delegate(matrix &_matrix) : _matrix{_matrix} {}
+
+  auto on_connect(websocket::session &client, std::string_view _target)
+      -> std::any override {
+    auto target = std::string{_target};
+    if (auto matches = std::smatch{};
+        std::regex_match(target, matches, std::regex{R"(input_(\d*))"})) {
+      auto port = static_cast<unsigned short>(std::stoi(matches[1]));
+      auto device = std::make_shared<input_device>(port);
+      websocket::send(client.shared_from_this(),
+                      std::make_shared<std::string>(device->name()));
+      _matrix.add_input(device);
+      return device;
+    } else if (auto matches = std::smatch{}; std::regex_match(
+                   target, matches, std::regex{R"(output_(\d*))"})) {
+      auto port = static_cast<unsigned short>(std::stoi(matches[1]));
+      auto device = std::make_shared<output_device>(port);
+      websocket::send(client.shared_from_this(),
+                      std::make_shared<std::string>(device->name()));
+      _matrix.add_output(device);
+      return device;
+    } else {
+      return this->websocket::tracking_delegate::on_connect(client, target);
+    }
   }
 };
 
-void parse_io_devices(std::istream &is, auto const &add) {
-  auto regex = std::regex{R"(([^:]*): (.*))"};
-
-  auto line = std::string{};
-  while ([&] {
-    std::getline(is, line);
-    return line != "";
-  }()) {
-    if (std::smatch match; std::regex_match(line, match, regex)) {
-      if (match.size() == 3) {
-        add(match[1].str(), match[2].str());
-      }
-    }
-  }
-}
-
-void parse_inputs(std::istream &is, matrix &matrix_) {
-  parse_io_devices(is, [&](std::string name, std::string executable) {
-    matrix_.add_input(std::move(name), std::move(executable));
-  });
-}
-
-void parse_outputs(std::istream &is, matrix &matrix_) {
-  parse_io_devices(is, [&](std::string name, std::string executable) {
-    matrix_.add_output(std::move(name), std::move(executable));
-  });
-}
-
-void parse_connections(std::istream &is, matrix &matrix_) {
-  auto regex = std::regex{R"(([^&]*) & ([^&]*))"};
-
-  auto line = std::string{};
-  while ([&] {
-    std::getline(is, line);
-    return line != "";
-  }()) {
-    if (std::smatch match; std::regex_match(line, match, regex)) {
-      if (match.size() == 3) {
-        matrix_.connect(match[1].str(), match[2].str());
-      }
-    }
-  }
-}
-
-int main([[maybe_unused]] int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "Needs path to config file\n";
-    std::terminate();
-  }
-
+int main(int, char **) {
   auto matrix_ = matrix{};
 
   auto http_delegate_ = std::make_shared<http_delegate>(matrix_);
-  auto websocket_delegate_ = std::make_shared<websocket_delegate>();
+  auto websocket_delegate_ = std::make_shared<websocket_delegate>(matrix_);
   auto server_ =
       server{http_delegate_, websocket_delegate_, "0.0.0.0", 8080, 4};
 
-  matrix_.reload_clients = [&] { server_.send(""s); };
+  matrix_.reload_clients = [&] { websocket_delegate_->send(""s); };
 
-  auto config_file = std::ifstream{argv[1]};
-  parse_inputs(config_file, matrix_);
-  parse_outputs(config_file, matrix_);
-  parse_connections(config_file, matrix_);
-
-  matrix_.run();
-
-  auto volatile x = 0;
-  while (true) {
-    x = 0;
-  }
+  matrix_.run(40ms);
 }

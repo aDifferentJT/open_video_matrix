@@ -1,3 +1,4 @@
+#include <iostream>
 #include <random>
 #include <utility>
 
@@ -29,7 +30,11 @@ private:
 
   struct remover_t {
     char const *name;
-    ~remover_t() { ipc::shared_memory_object::remove(name); }
+    ~remover_t() {
+      if (!ipc::shared_memory_object::remove(name)) {
+        std::cerr << "Failed to remove shared memory object\n";
+      }
+    }
   } remover;
 
   ipc::shared_memory_object object;
@@ -51,13 +56,10 @@ public:
 
   auto name() const -> std::string const & { return _name; }
 
-  auto data() -> T * {
-    return reinterpret_cast<T *>(region.get_address());
-  }
+  auto data() -> T * { return reinterpret_cast<T *>(region.get_address()); }
+  auto data() const -> T const * { return reinterpret_cast<T const *>(region.get_address()); }
 
-  auto operator->() -> T * {
-    return data();
-  }
+  auto operator->() -> T * { return data(); }
 };
 
 template <typename T> class ipc_unmanaged_object {
@@ -66,15 +68,14 @@ private:
   ipc::mapped_region region;
 
 public:
-  ipc_unmanaged_object(char const * name)
-      : object{ipc::open_only, name, ipc::read_write},
-        region{object, ipc::read_write, 0, sizeof(T)} {}
+  ipc_unmanaged_object(char const *name)
+      : object{ipc::open_only, name, ipc::read_write}, region{object,
+                                                              ipc::read_write,
+                                                              0, sizeof(T)} {}
 
-  auto data() -> T * {
-    return reinterpret_cast<T *>(region.get_address());
-  }
+  auto data() -> T * { return reinterpret_cast<T *>(region.get_address()); }
 
-  auto operator->() -> T * {
-    return data();
-  }
+  auto operator*() -> T & { return *data(); }
+
+  auto operator->() -> T * { return data(); }
 };

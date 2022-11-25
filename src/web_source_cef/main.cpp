@@ -41,14 +41,15 @@ public:
   using body_type = beast::http::string_body;
 
 private:
+  std::string_view name;
   CefRefPtr<CefBrowser> &_browser;
   CefString &_title;
   CefString &_url;
 
 public:
-  http_delegate(CefRefPtr<CefBrowser> &browser, CefString &title,
-                CefString &url)
-      : _browser{browser}, _title{title}, _url{url} {}
+  http_delegate(std::string_view name, CefRefPtr<CefBrowser> &browser,
+                CefString &title, CefString &url)
+      : name{name}, _browser{browser}, _title{title}, _url{url} {}
 
   template <typename Body, typename Allocator>
   void handle_request(
@@ -61,7 +62,8 @@ public:
   <head>
   </head>
   <body>
-    {title}
+    <h2>{name}</h2>
+    <h3>{title}</h3>
     <br/>
     <input type="text" id="url" value="{url}"></input>
     <button onclick="fetch('/load', {{method: 'POST', body: document.getElementById('url').value}})">
@@ -94,7 +96,8 @@ public:
   </body>
 </html>
 )html"sv,
-          "title"_a = _title.ToString(), "url"_a = _url.ToString());
+          "name"_a = name, "title"_a = _title.ToString(),
+          "url"_a = _url.ToString());
       auto mime_type = "text/html"sv;
 
       return http::string_response(req, std::move(body), mime_type, send);
@@ -109,13 +112,6 @@ public:
     } else {
       return send(http::not_found(req));
     }
-  }
-};
-
-class websocket_delegate {
-public:
-  void on_read(beast::flat_buffer &buffer) {
-    // TODO
   }
 };
 
@@ -142,13 +138,14 @@ class Client : public CefClient,
 
 private:
   CefRefPtr<CefBrowser> &_browser;
-  triple_buffer *output_buffer;
+  std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer;
   CefString &_title;
   CefString &_url;
   std::function<void()> &reload_clients;
 
 public:
-  Client(CefRefPtr<CefBrowser> &browser, triple_buffer *output_buffer,
+  Client(CefRefPtr<CefBrowser> &browser,
+         std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer,
          CefString &title, CefString &url,
          std::function<void()> &reload_clients)
       : _browser{browser}, output_buffer{output_buffer}, _title{title},
@@ -186,19 +183,28 @@ public:
   // CefRenderHandler methods
   auto GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo &screen_info)
       -> bool override {
-    screen_info = {1.0, 32, 8, false, {0, 0, 1920, 1080}, {0, 0, 1920, 1080}};
+    screen_info = {1.0,
+                   32,
+                   8,
+                   false,
+                   {0, 0, triple_buffer::width, triple_buffer::height},
+                   {0, 0, triple_buffer::width, triple_buffer::height}};
     return true;
   }
 
   void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) override {
-    rect = {0, 0, 1920, 1080};
+    rect = {0, 0, triple_buffer::width, triple_buffer::height};
   }
 
   void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                RectList const &dirtyRects, void const *buffer, int width,
                int height) override {
-    std::memcpy(output_buffer->write().data(), buffer, triple_buffer::size);
-    output_buffer->done_writing();
+    auto typed_buffer = static_cast<uint8_t const *>(buffer);
+    if (output_buffer) {
+      std::copy(typed_buffer, typed_buffer + triple_buffer::size,
+                (*output_buffer)->write().begin());
+      (*output_buffer)->done_writing();
+    }
   }
 };
 
@@ -208,13 +214,14 @@ class App : public CefApp, CefBrowserProcessHandler {
 
 private:
   CefRefPtr<CefBrowser> &_browser;
-  triple_buffer *output_buffer;
+  std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer;
   CefString &_title;
   CefString &_url;
   std::function<void()> &reload_clients;
 
 public:
-  App(CefRefPtr<CefBrowser> &browser, triple_buffer *output_buffer,
+  App(CefRefPtr<CefBrowser> &browser,
+      std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer,
       CefString &title, CefString &url, std::function<void()> &reload_clients)
       : _browser{browser}, output_buffer{output_buffer}, _title{title},
         _url{url}, reload_clients{reload_clients} {}
@@ -242,9 +249,7 @@ public:
     info.SetAsPopup(nullptr, "Web View");
 #endif
 
-    auto url = "http://randomcolour.com"s;
-
-    CefBrowserHost::CreateBrowser(info, client, url, settings, nullptr,
+    CefBrowserHost::CreateBrowser(info, client, _url, settings, nullptr,
                                   nullptr);
   }
 };
@@ -348,22 +353,23 @@ auto main(int argc, char **argv) -> int {
   [Application sharedApplication];
 #endif
 
-  auto browser = CefRefPtr<CefBrowser>{};
-
-  auto output_buffer = ipc_unmanaged_object<triple_buffer>{argv[argc - 1]};
-
-  auto title = CefString{};
-  auto url = CefString{};
-
-  auto reload_clients = std::function<void()>{[] {}};
-
-  auto app = CefRefPtr<App>{
-      new App{browser, output_buffer.data(), title, url, reload_clients}};
-
   if (auto exitCode = CefExecuteProcess(mainArgs, nullptr, nullptr);
       exitCode >= 0) {
     return exitCode;
   }
+
+  auto browser = CefRefPtr<CefBrowser>{};
+
+  auto output_buffer = std::optional<ipc_unmanaged_object<triple_buffer>>{};
+
+  auto const name = argc >= 2 ? std::string_view{argv[1]} : "Web Source"sv;
+  auto title = CefString{};
+  auto url = argc >= 3 ? CefString{argv[2]} : CefString{"http://example.com"};
+
+  auto reload_clients = std::function<void()>{[] {}};
+
+  auto app = CefRefPtr<App>{
+      new App{browser, output_buffer, title, url, reload_clients}};
 
   auto settings = CefSettings{};
 
@@ -393,13 +399,23 @@ auto main(int argc, char **argv) -> int {
       }};
   */
 
-  auto http_delegate_ = std::make_shared<http_delegate>(browser, title, url);
-  auto websocket_delegate_ = std::make_shared<websocket_delegate>();
+  auto http_delegate_ =
+      std::make_shared<http_delegate>(name, browser, title, url);
+  auto websocket_delegate_ = std::make_shared<websocket::tracking_delegate>();
   auto server_ = server{http_delegate_, websocket_delegate_, "0.0.0.0", 0, 4};
 
-  reload_clients = [&] { server_.send(""s); };
+  reload_clients = [&] { websocket_delegate_->send(""s); };
 
-  std::cout << server_.port() << '\n' << std::flush;
+  // TODO terminate on disconnect
+  auto router_websocket_delegate_ = websocket::make_read_client_delegate(
+      [&](std::any &, beast::flat_buffer &buffer) {
+        auto name = std::string{static_cast<char const *>(buffer.data().data()),
+                                buffer.data().size()};
+        output_buffer.emplace(name.c_str());
+      });
+  auto router_websocket = server_.connect_to_websocket(
+      router_websocket_delegate_, "127.0.0.1", 8080,
+      fmt::format("input_{port}", "port"_a = server_.port()));
 
   CefRunMessageLoop();
 

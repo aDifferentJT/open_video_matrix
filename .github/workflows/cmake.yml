@@ -60,7 +60,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install libboost-dev librange-v3-dev libfmt-dev libmagick++-dev
+        sudo apt-get install libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev ibboost-dev librange-v3-dev libfmt-dev libmagick++-dev libpng++-dev libpoppler-cpp-dev libpostproc-dev librtaudio-dev libswresample-dev libswscale-dev libvlc-dev libvlccore-dev
 
     - name: Install boost, range-v3, libfmt, imagemagick (macOS)
       if: runner.os == 'macOS'

@@ -33,8 +33,6 @@ using fmt::operator""_a;
 
 using namespace std::literals;
 
-using ztd::out_ptr::out_ptr;
-
 struct DeckLinkRelease {
   void operator()(IUnknown *p) {
     if (p != nullptr) {
@@ -58,16 +56,13 @@ struct DLString {
   BSTR data;
 #endif
 
-  DLString() = default;
-  DLString(DLString const &) = delete;
-
   void print() const {
 #if defined(__linux__)
-    std::cerr << data;
+    std::cout << data;
 #elif defined(__APPLE__) && defined(__MACH__)
-    std::cerr << CFStringGetCStringPtr(data, kCFStringEncodingASCII);
+    std::cout << CFStringGetCStringPtr(data, kCFStringEncodingASCII);
 #elif defined(WIN32)
-    std::wcerr << data;
+    std::wcout << data;
 #endif
   }
 
@@ -97,6 +92,8 @@ template <> struct fmt::formatter<DLString> : fmt::formatter<char const *> {
   }
 };
 
+using ztd::out_ptr::out_ptr;
+
 template <typename T> auto find_if(auto &&it, auto const &f) {
   auto x = decklink_ptr<T>{};
   while (it->Next(out_ptr(x)) == S_OK) {
@@ -107,62 +104,116 @@ template <typename T> auto find_if(auto &&it, auto const &f) {
   return decklink_ptr<T>{};
 }
 
-class active_decklink {
+class output_frame : public IDeckLinkVideoFrame {
 private:
-  decklink_ptr<IDeckLinkOutput> decklink_output;
-  decklink_ptr<IDeckLinkKeyer> decklink_keyer;
+  triple_buffer::buffer &buffer;
 
 public:
-  active_decklink(IDeckLink &decklink, bool external_keyer) {
-    if (decklink.QueryInterface(IID_IDeckLinkOutput,
-                                out_ptr(decklink_output)) != S_OK) {
-      std::cerr << "Could not get a DeckLink output\n";
+  output_frame(triple_buffer::buffer &buffer) : buffer{buffer} {}
+
+  auto QueryInterface(REFIID id, void **outputInterface) -> HRESULT override {
+    *outputInterface = nullptr;
+    return E_NOINTERFACE;
+  }
+
+  auto AddRef() -> ULONG override { return 0; }
+  auto Release() -> ULONG override { return 0; }
+
+  auto GetWidth() -> long override { return triple_buffer::width; }
+  auto GetHeight() -> long override { return triple_buffer::height; }
+  auto GetRowBytes() -> long override { return triple_buffer::pitch; }
+  auto GetPixelFormat() -> BMDPixelFormat override { return bmdFormat8BitBGRA; }
+  auto GetFlags() -> BMDFrameFlags override { return bmdFrameFlagDefault; }
+  auto GetBytes(void **_buffer) -> HRESULT override {
+    *_buffer = buffer.begin();
+    return S_OK;
+  }
+  auto GetTimecode(BMDTimecodeFormat format, IDeckLinkTimecode **timecode)
+      -> HRESULT override {
+    *timecode = nullptr;
+    return S_FALSE;
+  }
+  auto GetAncillaryData(IDeckLinkVideoFrameAncillary **ancillary)
+      -> HRESULT override {
+    *ancillary = nullptr;
+    return S_FALSE;
+  }
+};
+
+class Callback : public IDeckLinkInputCallback {
+private:
+  std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer;
+  IDeckLinkVideoConversion &decklink_convertor;
+
+public:
+  Callback(std::optional<ipc_unmanaged_object<triple_buffer>> &output_buffer,
+           IDeckLinkVideoConversion &decklink_convertor)
+      : output_buffer{output_buffer}, decklink_convertor{decklink_convertor} {}
+
+private:
+  auto VideoInputFrameArrived(IDeckLinkVideoInputFrame *videoFrame,
+                              IDeckLinkAudioInputPacket *audioPacket)
+      -> HRESULT override {
+    if (output_buffer) {
+      auto output_frame_ = output_frame{(*output_buffer)->write()};
+      decklink_convertor.ConvertFrame(videoFrame, &output_frame_);
+      (*output_buffer)->done_writing();
+    }
+    return S_OK;
+  }
+
+  auto
+  VideoInputFormatChanged(BMDVideoInputFormatChangedEvents notificationEvents,
+                          IDeckLinkDisplayMode *newDisplayMode,
+                          BMDDetectedVideoInputFormatFlags detectedSignalFlags)
+      -> HRESULT override {
+    if (newDisplayMode->GetDisplayMode() != bmdModeHD1080p25) {
+      std::cerr << "Invalid mode\n";
       std::terminate();
     }
+    return S_OK;
+  }
 
-    if (decklink.QueryInterface(IID_IDeckLinkKeyer, out_ptr(decklink_keyer)) !=
+  auto QueryInterface(REFIID iid, LPVOID *ppv) -> HRESULT override {
+    return E_NOINTERFACE;
+  }
+  auto AddRef() -> ULONG override { return 0; }
+  auto Release() -> ULONG override { return 0; }
+};
+
+class active_decklink {
+private:
+  decklink_ptr<IDeckLinkInput> decklink_input;
+
+public:
+  active_decklink(IDeckLink &decklink, Callback &callback) {
+    if (decklink.QueryInterface(IID_IDeckLinkInput, out_ptr(decklink_input)) !=
         S_OK) {
-      std::cerr << "Could not get a DeckLink keyer\n";
+      std::cerr << "Could not get a DeckLink input\n";
       std::terminate();
     }
 
-    if (decklink_output->EnableVideoOutput(bmdModeHD1080p25,
-                                           bmdVideoOutputFlagDefault) != S_OK) {
-      std::cerr << "Could not enable video output\n";
+    if (decklink_input->EnableVideoInput(bmdModeHD1080p25, bmdFormat8BitYUV,
+                                         bmdVideoInputEnableFormatDetection) !=
+        S_OK) {
+      std::cerr << "Could not enable video input\n";
       std::terminate();
     }
 
-    if (decklink_keyer->Enable(external_keyer) != S_OK ||
-        decklink_keyer->SetLevel(255) != S_OK) {
-      std::cerr << "Could not enable keyer\n";
+    if (decklink_input->SetCallback(&callback) != S_OK) {
+      std::cerr << "Could not set callback\n";
+      std::terminate();
+    }
+
+    if (decklink_input->StartStreams() != S_OK) {
+      std::cerr << "Could not start streams\n";
       std::terminate();
     }
   }
 
   ~active_decklink() {
-    decklink_keyer->Disable();
-    decklink_output->DisableVideoOutput();
-  }
-
-  void display_frame(triple_buffer::buffer const &buffer) {
-    auto frame = decklink_ptr<IDeckLinkMutableVideoFrame>{};
-    if (decklink_output->CreateVideoFrame(
-            triple_buffer::width, triple_buffer::height, triple_buffer::pitch,
-            bmdFormat8BitBGRA, bmdFrameFlagDefault, out_ptr(frame)) != S_OK) {
-      std::cerr << "Could not create frame\n";
-      std::terminate();
-    }
-
-    void *data;
-    if (frame->GetBytes(&data) != S_OK) {
-      std::cerr << "Can't get frame data\n";
-      std::terminate();
-    }
-
-    auto typed_buffer = static_cast<uint8_t *>(data);
-    std::copy(buffer.begin(), buffer.end(), typed_buffer);
-
-    decklink_output->DisplayVideoFrameSync(frame.get());
+    decklink_input->StopStreams();
+    decklink_input->DisableVideoInput();
   }
 };
 
@@ -207,7 +258,6 @@ private:
   std::string_view name;
   std::vector<decklink_ptr<IDeckLink>> &decklinks;
   std::optional<std::size_t> &decklink_index;
-  bool &external_keyer;
 
   ReloadDecklink reload_decklink;
 
@@ -217,10 +267,9 @@ public:
   http_delegate(std::string_view name,
                 std::vector<decklink_ptr<IDeckLink>> &decklinks,
                 std::optional<std::size_t> &decklink_index,
-                bool &external_keyer, ReloadDecklink reload_decklink)
+                ReloadDecklink reload_decklink)
       : name{name}, decklinks{decklinks}, decklink_index{decklink_index},
-        external_keyer{external_keyer}, reload_decklink{
-                                            std::move(reload_decklink)} {}
+        reload_decklink{std::move(reload_decklink)} {}
 
   template <typename Body, typename Allocator>
   void handle_request(
@@ -238,12 +287,6 @@ public:
     <select onchange="fetch('/decklink', {{method: 'POST', body: event.target.value}})">
       <option value="-1"> - </option>
       {decklinks}
-    </select>
-    <br/>
-    Keyer
-    <select onchange="fetch('/keyer', {{method: 'POST', body: event.target.value}})">
-      <option value="internal" {internal_selected}>Internal</option>
-      <option value="external" {external_selected}>External</option>
     </select>
     <script>
       let ws;
@@ -272,9 +315,7 @@ public:
           "decklinks"_a = fmt::join(
               ranges::views::zip_with(decklink_option::make(decklink_index),
                                       ranges::views::iota(0ul), decklinks),
-              ""),
-          "internal_selected"_a = external_keyer ? ""sv : "selected"sv,
-          "external_selected"_a = external_keyer ? "selected"sv : ""sv);
+              ""));
       auto mime_type = "text/html"sv;
 
       return http::string_response(req, std::move(body), mime_type, send);
@@ -289,12 +330,6 @@ public:
       reload_decklink();
       reload_clients();
       return send(http::empty_response(req));
-    } else if (req.target() == "/keyer" &&
-               req.method() == beast::http::verb::post) {
-      external_keyer = req.body() == "external"sv;
-      reload_decklink();
-      reload_clients();
-      return send(http::empty_response(req));
     } else {
       return send(http::not_found(req));
     }
@@ -302,26 +337,42 @@ public:
 };
 
 int main(int argc, char **argv) {
-  auto const name = argc >= 2 ? std::string_view{argv[1]} : "Decklink Output"sv;
+  auto const name = argc >= 2 ? std::string_view{argv[1]} : "Decklink Input"sv;
+
+#if defined(WIN32)
+  if (CoInitialize(nullptr) != S_OK) {
+    std::cerr << "Could not initialise COM (Windows)\n";
+    std::terminate();
+  }
+#endif
+
+#if defined(UNIX)
+  auto decklink_convertor = make_decklink_ptr(CreateVideoConversionInstance());
+#elif defined(WIN32)
+  auto decklink_convertor = decklink_ptr<IDeckLinkConversion>{};
+  if (CoCreateInstance(CLSID_CDeckLinkVideoConversion, nullptr, CLSCTX_ALL,
+                       IID_IDeckLinkVideoConversion,
+                       out_ptr(decklink_convertor)) != S_OK) {
+    std::cerr << "Could not get a DeckLink Convertor (Windows)\n";
+    std::terminate();
+  }
+#endif
 
   auto decklinks = [&] {
 #if defined(UNIX)
-    auto decklinkIterator = make_decklink_ptr(CreateDeckLinkIteratorInstance());
+    auto decklink_iterator =
+        make_decklink_ptr(CreateDeckLinkIteratorInstance());
 #elif defined(WIN32)
-    if (CoInitialize(nullptr) != S_OK) {
-      std::cerr << "Could not initialise COM (Windows)\n";
-      std::terminate();
-    }
-    auto decklinkIterator = decklink_ptr<IDeckLinkIterator>{};
+    auto decklink_iterator = decklink_ptr<IDeckLinkIterator>{};
     if (CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL,
                          IID_IDeckLinkIterator,
-                         out_ptr(decklinkIterator)) != S_OK) {
+                         out_ptr(decklink_iterator)) != S_OK) {
       std::cerr << "Could not get a DeckLink Iterator (Windows)\n";
       std::terminate();
     }
 #endif
 
-    if (decklinkIterator == nullptr) {
+    if (decklink_iterator == nullptr) {
       std::cerr << "Could not get a DeckLink Iterator\n";
       std::terminate();
     }
@@ -329,7 +380,7 @@ int main(int argc, char **argv) {
     auto decklinks = std::vector<decklink_ptr<IDeckLink>>{};
     {
       auto decklink = decklink_ptr<IDeckLink>{};
-      while (decklinkIterator->Next(out_ptr(decklink)) == S_OK) {
+      while (decklink_iterator->Next(out_ptr(decklink)) == S_OK) {
         decklinks.push_back(std::move(decklink));
       }
     }
@@ -337,70 +388,23 @@ int main(int argc, char **argv) {
   }();
 
   auto decklink_index = std::optional<std::size_t>{};
-  auto external_keyer = false;
   auto decklink = std::optional<active_decklink>{};
+
+  auto output_buffer = std::optional<ipc_unmanaged_object<triple_buffer>>{};
+
+  auto callback = Callback{output_buffer, *decklink_convertor};
 
   auto reload_decklink = [&] {
     if (decklink_index) {
-      decklink.emplace(*decklinks[*decklink_index], external_keyer);
+      decklink.emplace(*decklinks[*decklink_index], callback);
     } else {
       decklink = std::nullopt;
     }
   };
 
-  /*
-  auto displayMode = [&] {
-    auto displayModeIterator = decklink_ptr<IDeckLinkDisplayModeIterator>{};
-    if (decklinkOutput->GetDisplayModeIterator(out_ptr(displayModeIterator))
-  != S_OK) { std::cerr << "Could not get a display mode iterator\n";
-      std::terminate();
-    }
-
-    auto modes = std::vector<decklink_ptr<IDeckLinkDisplayMode>>{};
-    {
-      auto mode = decklink_ptr<IDeckLinkDisplayMode>{};
-      while (displayModeIterator->Next(out_ptr(mode)) == S_OK) {
-        modes.push_back(std::move(mode));
-      }
-    }
-
-    auto const index = [&] {
-      if (modes.empty()) {
-        std::cerr << "Could not find any display modes\n";
-        std::terminate();
-      } else {
-        std::cerr << "Modes:\n";
-        {
-          auto i = 0;
-          for (auto const &mode : modes) {
-            auto name = DLString{};
-            mode->GetName(&name.data);
-            std::cerr << i++ << ' ';
-            name.print();
-            std::cerr << '\n';
-          }
-        }
-        /
-        std::cerr << "Please select: ";
-        auto i = -1;
-        while (i < 0 || i >= modes.size()) {
-          std::cin >> i;
-        }
-        return i;
-        /
-        return 4;
-      }
-    }();
-
-    return std::move(modes[index]);
-  }();
-  */
-
-  auto input_buffer = std::optional<ipc_unmanaged_object<triple_buffer>>{};
-
   auto http_delegate_ =
       std::make_shared<http_delegate<decltype(reload_decklink)>>(
-          name, decklinks, decklink_index, external_keyer, reload_decklink);
+          name, decklinks, decklink_index, reload_decklink);
   auto websocket_delegate_ = std::make_shared<websocket::tracking_delegate>();
   auto server_ = server{http_delegate_, websocket_delegate_, "0.0.0.0", 0, 4};
 
@@ -411,28 +415,13 @@ int main(int argc, char **argv) {
       [&](std::any &, beast::flat_buffer &buffer) {
         auto name = std::string{static_cast<char const *>(buffer.data().data()),
                                 buffer.data().size()};
-        input_buffer.emplace(name.c_str());
+        output_buffer.emplace(name.c_str());
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("output_{port}", "port"_a = server_.port()));
-
-  auto nextFrame = std::chrono::steady_clock::now();
+      fmt::format("input_{port}", "port"_a = server_.port()));
 
   while (true) {
-    std::this_thread::sleep_until(nextFrame);
-
-    if (input_buffer) {
-      while (!(*input_buffer)->novel_to_read()) {
-      }
-
-      (*input_buffer)->about_to_read();
-
-      if (decklink) {
-        decklink->display_frame((*input_buffer)->read());
-      }
-    }
-
-    nextFrame = std::chrono::steady_clock::now() + 40ms;
+    std::this_thread::sleep_for(1h);
   }
 }

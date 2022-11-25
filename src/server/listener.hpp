@@ -64,32 +64,28 @@ static auto create(net::io_context &ioc, tcp::endpoint endpoint)
 }
 
 // Start accepting incoming connections
-template <http::delegate HttpDelegate, websocket::delegate WebsocketDelegate>
-static void
-run(std::shared_ptr<HttpDelegate> http_delegate,
-    std::shared_ptr<WebsocketDelegate> websocket_delegate, net::io_context &ioc,
-    std::unique_ptr<tcp::acceptor> acceptor,
-    synchronised<std::unordered_set<websocket::session<WebsocketDelegate> *>>
-        &clients) {
+template <http::delegate HttpDelegate>
+static void run(std::shared_ptr<HttpDelegate> http_delegate,
+                std::shared_ptr<websocket::delegate> websocket_delegate,
+                net::io_context &ioc, std::unique_ptr<tcp::acceptor> acceptor) {
   auto &acceptor_ = *acceptor;
 
   // The new connection gets its own strand
-  acceptor_.async_accept(net::make_strand(ioc),
-                         [http_delegate = std::move(http_delegate),
-                          websocket_delegate = std::move(websocket_delegate),
-                          &ioc, acceptor = std::move(acceptor), &clients](
-                             beast::error_code ec, tcp::socket socket) mutable {
-                           if (ec) {
-                             return fail(ec, "accept");
-                           } else {
-                             // Launch a new session for this connection
-                             http::run(http_delegate, websocket_delegate,
-                                       std::move(socket), clients);
-                           }
+  acceptor_.async_accept(
+      net::make_strand(ioc),
+      [http_delegate = std::move(http_delegate),
+       websocket_delegate = std::move(websocket_delegate), &ioc,
+       acceptor = std::move(acceptor)](beast::error_code ec,
+                                       tcp::socket socket) mutable {
+        if (ec) {
+          return fail(ec, "accept");
+        } else {
+          // Launch a new session for this connection
+          http::run(http_delegate, websocket_delegate, std::move(socket));
+        }
 
-                           run(http_delegate, websocket_delegate, ioc,
-                               std::move(acceptor), clients);
-                         });
+        run(http_delegate, websocket_delegate, ioc, std::move(acceptor));
+      });
 }
 }; // namespace listener
 

@@ -72,6 +72,20 @@ auto server_error(
 }
 
 template <typename Body, typename Allocator>
+auto redirect_response(
+    beast::http::request<Body, beast::http::basic_fields<Allocator>> const &req,
+    std::string_view dest) {
+  auto res = beast::http::response<beast::http::string_body>{
+      beast::http::status::see_other, req.version()};
+  res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+  res.set(beast::http::field::content_type, "text/html");
+  res.keep_alive(req.keep_alive());
+  res.body() = dest;
+  res.prepare_payload();
+  return res;
+}
+
+template <typename Body, typename Allocator>
 auto string_response(
     beast::http::request<Body, beast::http::basic_fields<Allocator>> const &req,
     std::string body, std::string_view mime_type, auto &&send) {
@@ -126,10 +140,9 @@ concept delegate = true; /*requires(
   delegate.handle_request(req, [](auto &&) {});
 };*/
 
-template <delegate Delegate, websocket::delegate WebsocketDelegate>
-class session {
+template <delegate Delegate> class session {
   std::shared_ptr<Delegate> delegate_;
-  std::shared_ptr<WebsocketDelegate> websocket_delegate_;
+  std::shared_ptr<websocket::delegate> websocket_delegate_;
   beast::tcp_stream stream_;
   beast::flat_buffer buffer_;
 
@@ -140,10 +153,7 @@ class session {
 
   struct send_lambda;
 
-  using clients_t =
-      synchronised<std::unordered_set<websocket::session<WebsocketDelegate> *>>;
-
-  friend void do_read(std::unique_ptr<session> self, clients_t &clients) {
+  friend void do_read(std::unique_ptr<session> self) {
     auto &stream = self->stream_;
     auto &buffer = self->buffer_;
     auto &parser = self->parser_;
@@ -158,14 +168,14 @@ class session {
     // Read a request
     beast::http::async_read(
         stream, buffer, parser->get(),
-        [self = std::move(self), &clients](
-            beast::error_code ec, std::size_t bytes_transferred) mutable {
-          on_read(std::move(self), clients, ec, bytes_transferred);
+        [self = std::move(self)](beast::error_code ec,
+                                 std::size_t bytes_transferred) mutable {
+          on_read(std::move(self), ec, bytes_transferred);
         });
   }
 
-  static void on_read(std::unique_ptr<session> self, clients_t &clients,
-                      beast::error_code ec, std::size_t) {
+  static void on_read(std::unique_ptr<session> self, beast::error_code ec,
+                      std::size_t) {
     auto &delegate = self->delegate_;
     auto &websocket_delegate = self->websocket_delegate_;
     auto &stream = self->stream_;
@@ -186,36 +196,36 @@ class session {
     if (beast::websocket::is_upgrade(parser->get())) {
       // Create a websocket session, transferring ownership
       // of both the socket and the HTTP request.
-      websocket::run(websocket_delegate, stream.release_socket(), clients,
+      websocket::run(websocket_delegate, stream.release_socket(),
                      parser->release());
       return;
     }
 
     // Send the response
-    delegate->handle_request(parser->release(), [self = std::move(self),
-                                                 &clients](auto &&msg) mutable {
-      auto &stream = self->stream_;
+    delegate->handle_request(
+        parser->release(), [self = std::move(self)](auto &&msg) mutable {
+          auto &stream = self->stream_;
 
-      // The lifetime of the message has to extend
-      // for the duration of the async operation so
-      // we use a unique_ptr to manage it.
-      auto msg_ptr = std::make_unique<std::decay_t<decltype(msg)>>(
-          std::forward<decltype(msg)>(msg));
+          // The lifetime of the message has to extend
+          // for the duration of the async operation so
+          // we use a unique_ptr to manage it.
+          auto msg_ptr = std::make_unique<std::decay_t<decltype(msg)>>(
+              std::forward<decltype(msg)>(msg));
 
-      auto &msg_ref = *msg_ptr;
+          auto &msg_ref = *msg_ptr;
 
-      // Write the response
-      beast::http::async_write(
-          stream, msg_ref,
-          [self = std::move(self), &clients, msg = std::move(msg_ptr)](
-              beast::error_code ec, std::size_t bytes) mutable {
-            on_write(std::move(self), clients, ec, bytes, msg->need_eof());
-          });
-    });
+          // Write the response
+          beast::http::async_write(
+              stream, msg_ref,
+              [self = std::move(self), msg = std::move(msg_ptr)](
+                  beast::error_code ec, std::size_t bytes) mutable {
+                on_write(std::move(self), ec, bytes, msg->need_eof());
+              });
+        });
   }
 
-  static void on_write(std::unique_ptr<session> self, clients_t &clients,
-                       beast::error_code ec, std::size_t, bool close) {
+  static void on_write(std::unique_ptr<session> self, beast::error_code ec,
+                       std::size_t, bool close) {
     // Handle the error, if any
     if (ec)
       return fail(ec, "write");
@@ -228,34 +238,29 @@ class session {
     }
 
     // Read another request
-    do_read(std::move(self), clients);
+    do_read(std::move(self));
   }
 
 public:
   session(std::shared_ptr<Delegate> delegate,
-          std::shared_ptr<WebsocketDelegate> websocket_delegate,
+          std::shared_ptr<websocket::delegate> websocket_delegate,
           tcp::socket &&socket)
       : delegate_{std::move(delegate)},
         websocket_delegate_{std::move(websocket_delegate)}, stream_{std::move(
                                                                 socket)} {}
 
-  template <delegate Delegate_, websocket::delegate WebsocketDelegate_>
-  friend void
-  run(std::shared_ptr<Delegate_> delegate,
-      std::shared_ptr<WebsocketDelegate_> websocket_delegate,
-      tcp::socket &&socket,
-      typename session<Delegate_, WebsocketDelegate_>::clients_t &clients);
+  template <delegate Delegate_>
+  friend void run(std::shared_ptr<Delegate_> delegate,
+                  std::shared_ptr<websocket::delegate> websocket_delegate,
+                  tcp::socket &&socket);
 };
 
-template <delegate Delegate, websocket::delegate WebsocketDelegate>
-inline void
-run(std::shared_ptr<Delegate> delegate,
-    std::shared_ptr<WebsocketDelegate> websocket_delegate, tcp::socket &&socket,
-    typename session<Delegate, WebsocketDelegate>::clients_t &clients) {
-  do_read(std::make_unique<session<Delegate, WebsocketDelegate>>(
-              std::move(delegate), std::move(websocket_delegate),
-              std::move(socket)),
-          clients);
+template <delegate Delegate>
+inline void run(std::shared_ptr<Delegate> delegate,
+                std::shared_ptr<websocket::delegate> websocket_delegate,
+                tcp::socket &&socket) {
+  do_read(std::make_unique<session<Delegate>>(
+      std::move(delegate), std::move(websocket_delegate), std::move(socket)));
 }
 
 } // namespace http

@@ -1,11 +1,14 @@
-web_source 1: ./web_source/Release/web_source.app/Contents/MacOS/web_source
-web_source 2: ./web_source/Release/web_source.app/Contents/MacOS/web_source
+Stream Graphics: ./web_source_cef/Release/web_source
+Screen Graphics: ./web_source_cef/Release/web_source
+Multiview: ./decklink_source
 colour_source: ./colour_source
 presentation_source: ./presentation_source
 
-decklink_output 1: ./decklink_output
-decklink_output 2: ./decklink_output
-ndi_output: ./ndi_output
+Stream Output: ./decklink_output
+Screen Output: ./decklink_output
+Multiview Output: ./ndi_output
+Spare NDI Output: ./ndi_output
 
-web_source 1 & decklink_output 1
-web_source 2 & decklink_output 2
+Stream Graphics & Stream Output
+Screen Graphics & Screen Output
+Multiview & Multiview Output

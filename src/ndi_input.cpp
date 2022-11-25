@@ -18,7 +18,9 @@ public:
   using body_type = beast::http::string_body;
 
 private:
-  std::string &name;
+  std::vector<decklink_ptr<IDeckLink>> &sources;
+  std::optional<std::size_t> &source_index;
+
   ReloadSender const &reload_sender;
 
 public:
@@ -38,12 +40,11 @@ public:
   <head>
   </head>
   <body>
-    <h2>NDI Output</h2>
-    <input
-      onchange="fetch('/name', {{method: 'POST', body: event.target.value}})"
-      value="{name}"
-    >
-    </input>
+    <h2>NDI Input</h2>
+    <select onchange="fetch('/source', {{method: 'POST', body: event.target.value}})">
+      <option value="-1"> - </option>
+      {sources}
+    </select>
     <script>
       let ws;
       
@@ -67,7 +68,10 @@ public:
   </body>
 </html>
 )html"sv,
-          "name"_a = name);
+          "sources"_a = fmt::join(
+              ranges::views::zip_with(source_option::make(source_index),
+                                      ranges::views::iota(0ul), sources),
+              ""));
       auto mime_type = "text/html"sv;
 
       return http::string_response(req, std::move(body), mime_type, send);
@@ -84,13 +88,16 @@ public:
 };
 
 int main(int argc, char **argv) {
-  auto input_buffer = std::optional<ipc_unmanaged_object<triple_buffer>>{};
+  auto output_buffer = std::optional<ipc_unmanaged_object<triple_buffer>>{};
 
   auto const ndi = NDIlib{};
 
-  auto name = argc >= 2 ? std::string{argv[1]} : "Open Video Matrix"s;
+  NDIlib_find_instance_t finder = [] {
+    auto create = NDIlib_find_create_t{};
+    return ndi->find_create_v2(&create);
+  }();
 
-  NDIlib_send_instance_t sender;
+  NDIlib_recv_instance_t receiver;
 
   auto reload_sender = [&] {
     auto const send_create =
