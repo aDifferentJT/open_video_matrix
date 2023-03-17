@@ -13,8 +13,6 @@
 #include <avcpp/pixelformat.h>
 #include <avcpp/videorescaler.h>
 
-#include <RtAudio.h>
-
 #include <poppler-document.h>
 #include <poppler-image.h>
 #include <poppler-page-renderer.h>
@@ -235,7 +233,8 @@ void convert_slide(poppler::page const &page, triple_buffer::buffer &buffer,
     key_image(thumb_img, *key);
   }
 
-  std::copy_n(image.const_data(), triple_buffer::size, buffer.begin());
+  std::copy_n(image.const_data(), triple_buffer::size,
+              buffer.video_frame.begin());
   _thumbnail.base64 = encode_image(thumb_img);
 }
 
@@ -331,8 +330,6 @@ private:
 
 class video {
 private:
-  frame_queue &_frame_queue;
-
   std::unique_ptr<av::FormatContext> format_context;
   stream_codec<av::VideoDecoderContext> video_stream_codec;
   stream_codec<av::AudioDecoderContext> audio_stream_codec;
@@ -345,8 +342,6 @@ private:
 
   av::AudioResampler audio_resampler;
 
-  RtAudio audio_output{RtAudio::LINUX_ALSA}; // TODO pick API better
-
   std::atomic<bool> is_finished_pumping = false;
   std::atomic<bool> is_finished_showing = false;
 
@@ -356,41 +351,51 @@ private:
         std::chrono::duration<double>{timestamp.seconds()});
   }
 
-  static auto audio_callback(void *outputBuffer, void *inputBuffer,
-                             unsigned int nBufferFrames, double streamTime,
-                             RtAudioStreamStatus status, void *userData)
-      -> int {
-    auto &self = *static_cast<video *>(userData);
+  /*
+    static auto audio_callback(void *outputBuffer, void *inputBuffer,
+                               unsigned int nBufferFrames, double streamTime,
+                               RtAudioStreamStatus status, void *userData)
+        -> int {
+      auto &self = *static_cast<video *>(userData);
 
-    if (auto samples = self.audio_resampler.pop(nBufferFrames)) {
-      std::this_thread::sleep_until(self.start_time +
-                                    timestamp_to_duration(samples.pts()));
+      if (auto samples = self.audio_resampler.pop(nBufferFrames)) {
+        std::this_thread::sleep_until(self.start_time +
+                                      timestamp_to_duration(samples.pts()));
 
-      std::copy_n(samples.data(),
-                  sizeof(int32_t) * nBufferFrames *
-                      self.audio_stream_codec.context.channels(),
-                  static_cast<int8_t *>(outputBuffer));
-      return 0;
-    } else {
-      if (self.is_finished_pumping) {
-        self.is_finished_showing = true;
+        std::copy_n(samples.data(),
+                    sizeof(int32_t) * nBufferFrames *
+                        self.audio_stream_codec.context.channels(),
+                    static_cast<int8_t *>(outputBuffer));
+        return 0;
+      } else {
+        if (self.is_finished_pumping) {
+          self.is_finished_showing = true;
+        }
+        std::fill_n(static_cast<int32_t *>(outputBuffer),
+                    nBufferFrames * self.audio_stream_codec.context.channels(),
+                    0);
+        return 0;
       }
-      std::fill_n(static_cast<int32_t *>(outputBuffer),
-                  nBufferFrames * self.audio_stream_codec.context.channels(),
-                  0);
-      return 0;
     }
-  }
+  */
 
   auto frame_to_buffer(av::VideoFrame &frame) -> triple_buffer::buffer {
     auto buffer = triple_buffer::buffer{};
-    frame.copyToBuffer(buffer.data(), buffer.size());
+
+    frame.copyToBuffer(buffer.video_frame.data(), buffer.video_frame.size());
+
+    auto audio_samples =
+        audio_resampler.pop(triple_buffer::audio_samples_per_frame);
+std::cerr << "Got " << audio_samples.size() << " bytes\n";
+    std::memcpy(buffer.audio_frame.data(), audio_samples.data(),
+                audio_samples.size());
+
     return buffer;
   }
 
 public:
-  video(frame_queue &_frame_queue, std::string path)
-      : _frame_queue{_frame_queue}, format_context{[&] {
+  video(std::string path)
+      : format_context{[&] {
           auto format_context = std::make_unique<av::FormatContext>();
 
           format_context->openInput(path);
@@ -409,20 +414,7 @@ public:
                         AV_SAMPLE_FMT_S32,
                         audio_stream_codec.context.channelLayout(),
                         audio_stream_codec.context.sampleRate(),
-                        audio_stream_codec.context.sampleFormat()} {
-    auto audio_parameters = RtAudio::StreamParameters{
-        audio_output.getDefaultOutputDevice(),
-        static_cast<unsigned int>(audio_stream_codec.context.channels()), 0};
-
-    std::cout << "Using device "
-              << audio_output.getDeviceInfo(audio_parameters.deviceId).name
-              << " with " << audio_parameters.nChannels << " channels\n";
-    auto buffer_frames = 256u;
-    audio_output.openStream(&audio_parameters, nullptr, RTAUDIO_SINT32,
-                            audio_stream_codec.context.sampleRate(),
-                            &buffer_frames, &audio_callback, this);
-    audio_output.startStream();
-  }
+                        audio_stream_codec.context.sampleFormat()} {}
 
   auto pump() -> bool {
     if (auto packet = format_context->readPacket()) {
@@ -430,11 +422,12 @@ public:
         if (auto source_frame = video_stream_codec.context.decode(packet)) {
           if (auto scaled_frame =
                   video_rescaler.rescale(source_frame, av::throws())) {
-		  /*
-            _frame_queue.schedule(
-                frame_to_buffer(scaled_frame),
-                start_time + timestamp_to_duration(scaled_frame.pts()));
-		*/
+            /*
+                        _frame_queue.schedule(
+                            frame_to_buffer(scaled_frame),
+                            start_time +
+               timestamp_to_duration(scaled_frame.pts()));
+            */
           }
         }
       } else if (packet.streamIndex() == audio_stream_codec.stream_index) {
@@ -449,6 +442,24 @@ public:
       is_finished_pumping.notify_all();
       return false;
     }
+  }
+
+  auto get_next_frame() -> triple_buffer::buffer {
+    while (auto packet = format_context->readPacket()) {
+      if (packet.streamIndex() == video_stream_codec.stream_index) {
+        if (auto source_frame = video_stream_codec.context.decode(packet)) {
+          if (auto scaled_frame =
+                  video_rescaler.rescale(source_frame, av::throws())) {
+            return frame_to_buffer(scaled_frame);
+          }
+        }
+      } else if (packet.streamIndex() == audio_stream_codec.stream_index) {
+        if (auto source_samples = audio_stream_codec.context.decode(packet)) {
+          audio_resampler.push(source_samples);
+        }
+      }
+    }
+    return {};
   }
 
   void wait_until_finished() const { is_finished_showing.wait(false); }
@@ -873,19 +884,21 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(1s);
   }
 
-  auto _frame_queue = frame_queue{**output_buffer};
+  //  auto _frame_queue = frame_queue{**output_buffer};
 
-  auto _video =
-      video{_frame_queue, "/mnt/av_resources/Video Recordings/Give Thanks.mkv"};
+  auto _video = video{"/mnt/av_resources/Video Recordings/Give Thanks.mkv"};
 
-  auto video_needs_pumping = true;
-  while (video_needs_pumping) {
-    video_needs_pumping = _video.pump();
-  }
-
-  std::cerr << "Pumping finished\n";
+  auto nextFrame = std::chrono::steady_clock::now();
 
   while (true) {
-    std::this_thread::sleep_for(1h);
+    std::this_thread::sleep_until(nextFrame);
+
+    if (output_buffer) {
+      (*output_buffer)->write() = _video.get_next_frame();
+
+      (*output_buffer)->done_writing();
+    }
+
+    nextFrame = std::chrono::steady_clock::now() + 40ms;
   }
 }

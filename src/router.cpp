@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -24,7 +25,8 @@ namespace ipc = boost::interprocess;
 
 using fmt::operator""_a;
 
-void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
+void alpha_over(triple_buffer::video_frame_t &dst,
+                triple_buffer::video_frame_t const &src) {
   for (std::size_t i = 0; i < triple_buffer::size; i += 4) {
     // Div by 256 is much cheaper, so factor should range from 1 to 256
     // mult by 1 div by 256 will be 0
@@ -34,6 +36,13 @@ void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
       dst[j] = static_cast<uint8_t>(src[j] + (dst[j] * factor) / 256);
     }
   }
+}
+
+void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
+  alpha_over(dst.video_frame, src.video_frame);
+
+  std::transform(src.audio_frame.begin(), src.audio_frame.end(),
+                 dst.audio_frame.begin(), dst.audio_frame.begin(), std::plus{});
 }
 
 class io_device {

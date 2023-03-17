@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
   media_player.setVideoCallbacks(
       [&](void **planes) -> void * {
         if (output_buffer) {
-          planes[0] = (*output_buffer)->write().data();
+          planes[0] = (*output_buffer)->write().video_frame.data();
         }
         return nullptr;
       },

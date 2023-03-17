@@ -218,7 +218,7 @@ void convert_slide(poppler::page const &page, triple_buffer::buffer &buffer,
     key_image(thumb_img, *key);
   }
 
-  std::copy_n(image.const_data(), triple_buffer::size, buffer.begin());
+  std::copy_n(image.const_data(), triple_buffer::size, buffer.video_frame.begin());
   _thumbnail.base64 = encode_image(thumb_img);
 }
 

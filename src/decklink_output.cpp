@@ -132,6 +132,13 @@ public:
       std::terminate();
     }
 
+    if (decklink_output->EnableAudioOutput(
+            bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger, 2,
+            bmdAudioOutputStreamContinuous) != S_OK) {
+      std::cerr << "Could not enable audio output\n";
+      std::terminate();
+    }
+
     if (decklink_keyer->Enable(external_keyer) != S_OK ||
         decklink_keyer->SetLevel(255) != S_OK) {
       std::cerr << "Could not enable keyer\n";
@@ -141,6 +148,7 @@ public:
 
   ~active_decklink() {
     decklink_keyer->Disable();
+    decklink_output->DisableAudioOutput();
     decklink_output->DisableVideoOutput();
   }
 
@@ -160,9 +168,17 @@ public:
     }
 
     auto typed_buffer = static_cast<uint8_t *>(data);
-    std::copy(buffer.begin(), buffer.end(), typed_buffer);
+    std::copy(buffer.video_frame.begin(), buffer.video_frame.end(),
+              typed_buffer);
 
     decklink_output->DisplayVideoFrameSync(frame.get());
+
+    uint32_t audio_samples_written;
+    decklink_output->WriteAudioSamplesSync(
+        const_cast<void *>(
+            reinterpret_cast<void const *>(buffer.audio_frame.data())),
+        buffer.audio_frame.size(), &audio_samples_written);
+    std::cout << "Written: " << audio_samples_written << '\n';
   }
 };
 

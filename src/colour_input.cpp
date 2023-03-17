@@ -107,10 +107,10 @@ int main(int, char **) {
     if (output_buffer) {
       auto &buffer = (*output_buffer)->write();
       for (std::size_t i = 0; i < triple_buffer::size; i += 4) {
-        buffer[i + 0] = b;
-        buffer[i + 1] = g;
-        buffer[i + 2] = r;
-        buffer[i + 3] = 255;
+        buffer.video_frame[i + 0] = b;
+        buffer.video_frame[i + 1] = g;
+        buffer.video_frame[i + 2] = r;
+        buffer.video_frame[i + 3] = 255;
       }
       (*output_buffer)->done_writing();
     }

@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
           0.0f,
           NDIlib_frame_format_type_progressive,
           0,
-          const_cast<uint8_t *>((*input_buffer)->read().data()),
+          const_cast<uint8_t *>((*input_buffer)->read().video_frame.data()),
           triple_buffer::pitch};
 
       // Using the async version would require holding the lock too long

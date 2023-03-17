@@ -125,7 +125,7 @@ public:
   auto GetPixelFormat() -> BMDPixelFormat override { return bmdFormat8BitBGRA; }
   auto GetFlags() -> BMDFrameFlags override { return bmdFrameFlagDefault; }
   auto GetBytes(void **_buffer) -> HRESULT override {
-    *_buffer = buffer.begin();
+    *_buffer = buffer.video_frame.begin();
     return S_OK;
   }
   auto GetTimecode(BMDTimecodeFormat format, IDeckLinkTimecode **timecode)

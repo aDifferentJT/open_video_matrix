@@ -202,7 +202,7 @@ public:
     auto typed_buffer = static_cast<uint8_t const *>(buffer);
     if (output_buffer) {
       std::copy(typed_buffer, typed_buffer + triple_buffer::size,
-                (*output_buffer)->write().begin());
+                (*output_buffer)->write().video_frame.begin());
       (*output_buffer)->done_writing();
     }
   }

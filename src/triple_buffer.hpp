@@ -16,7 +16,19 @@ public:
   static constexpr auto pitch = width * 4;
   static constexpr auto height = 1080;
   static constexpr auto size = pitch * height;
-  using buffer = std::array<uint8_t, size>;
+
+  using video_frame_t = std::array<uint8_t, size>;
+
+  static constexpr auto sample_rate = 48'000;
+  static constexpr auto frame_rate = 25;
+  static constexpr auto num_channels = 2;
+  static constexpr auto audio_samples_per_frame = sample_rate * num_channels / frame_rate;
+  using audio_frame_t = std::array<int32_t, audio_samples_per_frame>;
+
+  struct buffer {
+    video_frame_t video_frame;
+    audio_frame_t audio_frame;
+  };
 
 private:
   ipc::interprocess_mutex mutex;

@@ -144,7 +144,7 @@ void convert_slide(Magick::Image &img, triple_buffer::buffer &buffer,
     img.extent({triple_buffer::width, triple_buffer::height}, bg_colour,
                Magick::CenterGravity);
     img.write(0, 0, triple_buffer::width, triple_buffer::height, "BGRA",
-              Magick::CharPixel, buffer.data());
+              Magick::CharPixel, buffer.video_frame.data());
 
     img.resize({192, 108});
     auto thumbnail_blob = Magick::Blob{};
