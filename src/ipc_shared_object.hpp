@@ -59,7 +59,10 @@ public:
   auto data() -> T * { return reinterpret_cast<T *>(region.get_address()); }
   auto data() const -> T const * { return reinterpret_cast<T const *>(region.get_address()); }
 
+  auto operator*() -> T & { return *data(); }
+  auto operator*() const -> T const & { return *data(); }
   auto operator->() -> T * { return data(); }
+  auto operator->() const -> T const * { return data(); }
 };
 
 template <typename T> class ipc_unmanaged_object {
@@ -74,8 +77,10 @@ public:
                                                               0, sizeof(T)} {}
 
   auto data() -> T * { return reinterpret_cast<T *>(region.get_address()); }
+  auto data() const -> T const * { return reinterpret_cast<T const *>(region.get_address()); }
 
   auto operator*() -> T & { return *data(); }
-
+  auto operator*() const -> T const & { return *data(); }
   auto operator->() -> T * { return data(); }
+  auto operator->() const -> T const * { return data(); }
 };

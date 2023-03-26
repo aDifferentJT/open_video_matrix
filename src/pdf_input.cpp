@@ -38,18 +38,19 @@ using namespace std::literals;
 // Should be std
 // C++20 make_unique_for_overwrite
 template <class T>
-requires(!std::is_array_v<T>) std::unique_ptr<T> make_unique_for_overwrite() {
+  requires(!std::is_array_v<T>)
+std::unique_ptr<T> make_unique_for_overwrite() {
   return std::unique_ptr<T>(new T);
 }
 
 template <class T>
-requires std::is_unbounded_array_v<T> std::unique_ptr<T>
-make_unique_for_overwrite(std::size_t n) {
+  requires std::is_unbounded_array_v<T>
+std::unique_ptr<T> make_unique_for_overwrite(std::size_t n) {
   return std::unique_ptr<T>(new std::remove_extent_t<T>[n]);
 }
 
 template <class T, class... Args>
-requires std::is_bounded_array_v<T>
+  requires std::is_bounded_array_v<T>
 void make_unique_for_overwrite(Args &&...) = delete;
 
 namespace ranges {
@@ -107,12 +108,9 @@ template <> struct fmt::formatter<filesystem_link> {
 };
 
 struct thumbnail {
-  std::size_t index;
-  std::size_t &active_slide;
+  int index;
+  int &active_slide;
   std::string base64;
-
-  thumbnail(std::size_t index, std::size_t &active_slide)
-      : index{index}, active_slide{active_slide}, base64{} {}
 };
 
 template <> struct fmt::formatter<thumbnail> {
@@ -190,16 +188,13 @@ void key_image(poppler::image &image, std::string key) {
   }
 }
 
-void convert_slide(poppler::page const &page, triple_buffer::buffer &buffer,
-                   thumbnail &_thumbnail, std::optional<std::string> key) {
+auto make_thumbnail(poppler::page const &page, std::optional<std::string> key)
+    -> std::string {
   auto page_rect = page.page_rect();
   auto width_pdf = page_rect.width();
   auto height_pdf = page_rect.height();
   auto width_in = width_pdf / 72;
   auto height_in = height_pdf / 72;
-
-  auto dpi_x = triple_buffer::width / width_in;
-  auto dpi_y = triple_buffer::height / height_in;
 
   auto width_thumb = 384;
   auto height_thumb = 216;
@@ -210,19 +205,43 @@ void convert_slide(poppler::page const &page, triple_buffer::buffer &buffer,
   // It seems that endianness is backwards so this is actually bgra
   renderer.set_image_format(poppler::image::format_argb32);
 
-  auto image = renderer.render_page(&page, dpi_x, dpi_y);
   auto thumb_img = renderer.render_page(&page, dpi_thumb_x, dpi_thumb_y);
 
   if (key) {
-    key_image(image, *key);
     key_image(thumb_img, *key);
   }
 
-  std::copy_n(image.const_data(), triple_buffer::size, buffer.video_frame.begin());
-  _thumbnail.base64 = encode_image(thumb_img);
+  return encode_image(thumb_img);
 }
 
-template <typename WriteFrame, typename ReloadDocument> class http_delegate {
+auto make_slide(poppler::page const &page, std::optional<std::string> key)
+    -> std::unique_ptr<triple_buffer::buffer> {
+  auto page_rect = page.page_rect();
+  auto width_pdf = page_rect.width();
+  auto height_pdf = page_rect.height();
+  auto width_in = width_pdf / 72;
+  auto height_in = height_pdf / 72;
+
+  auto dpi_x = triple_buffer::width / width_in;
+  auto dpi_y = triple_buffer::height / height_in;
+
+  auto renderer = poppler::page_renderer{};
+  // It seems that endianness is backwards so this is actually bgra
+  renderer.set_image_format(poppler::image::format_argb32);
+
+  auto image = renderer.render_page(&page, dpi_x, dpi_y);
+
+  if (key) {
+    key_image(image, *key);
+  }
+
+  auto buffer = std::make_unique<triple_buffer::buffer>();
+  std::copy_n(image.const_data(), triple_buffer::size,
+              std::begin(buffer->video_frame));
+  return buffer;
+}
+
+template <typename WriteFrame, typename ReloadThumbnails> class http_delegate {
 public:
   // using body_type = beast::http::buffer_body;
   // using body_type = beast::http::file_body;
@@ -233,22 +252,22 @@ private:
   std::string_view root_dir;
   std::unique_ptr<poppler::document> &document;
   std::vector<thumbnail> &thumbnails;
-  std::size_t &active_slide;
+  int &active_slide;
   std::optional<std::string> &key;
   WriteFrame const &write_frame;
-  ReloadDocument const &reload_document;
+  ReloadThumbnails const &reload_thumbnails;
 
 public:
   std::function<void()> reload_clients = [] {};
 
   http_delegate(std::string_view name, std::string_view root_dir,
                 std::unique_ptr<poppler::document> &document,
-                std::vector<thumbnail> &thumbnails, std::size_t &active_slide,
+                std::vector<thumbnail> &thumbnails, int &active_slide,
                 std::optional<std::string> &key, WriteFrame const &write_frame,
-                ReloadDocument const &reload_document)
+                ReloadThumbnails const &reload_thumbnails)
       : name{name}, root_dir{root_dir}, document{document},
         thumbnails{thumbnails}, active_slide{active_slide}, key{key},
-        write_frame{write_frame}, reload_document{reload_document} {}
+        write_frame{write_frame}, reload_thumbnails{reload_thumbnails} {}
 
   template <typename Body, typename Allocator>
   void handle_request(
@@ -391,9 +410,11 @@ public:
 
           auto abs_path = std::string{root_dir} + rel_path;
 
+          std::cerr << "path: " << abs_path << "\n";
           document = std::unique_ptr<poppler::document>{
               poppler::document::load_from_file(abs_path)};
-          reload_document();
+          std::cerr << "loaded" << "\n";
+          reload_thumbnails();
 
           return send(http::redirect_response(req, "/control"));
         }
@@ -439,7 +460,7 @@ public:
       auto target = std::string{req.target()};
       if (std::smatch match; std::regex_match(target, match, regex)) {
         if (match.size() == 2) {
-          active_slide = std::stoul(match[1].str());
+          active_slide = std::stoi(match[1].str());
           write_frame();
           reload_clients();
           return send(http::empty_response(req));
@@ -449,11 +470,11 @@ public:
     } else if (req.target() == "/activate_key" &&
                req.method() == beast::http::verb::post) {
       key = req.body();
-      reload_document();
+      reload_thumbnails();
       return send(http::empty_response(req));
     } else if (req.target() == "/deactivate_key") {
       key = std::nullopt;
-      reload_document();
+      reload_thumbnails();
       return send(http::empty_response(req));
     } else {
       return send(http::not_found(req));
@@ -485,9 +506,8 @@ int main(int argc, char **argv) {
   auto const root_dir = argc >= 3 ? std::string_view{argv[2]} : "."sv;
 
   auto document = std::unique_ptr<poppler::document>{};
-  auto slides = std::vector<triple_buffer::buffer>{};
   auto thumbnails = std::vector<thumbnail>{};
-  auto active_slide = std::size_t{0};
+  auto active_slide = 0;
 
   auto key = std::optional<std::string>{};
 
@@ -497,28 +517,31 @@ int main(int argc, char **argv) {
   auto reload_clients = [&] { websocket_delegate_->send(""s); };
 
   auto write_frame = [&] {
-    if (active_slide < slides.size()) {
-      if (output_buffer) {
-        (*output_buffer)->write() = slides[active_slide];
-        (*output_buffer)->done_writing();
+    if (document) {
+      if (active_slide < document->pages()) {
+        if (output_buffer) {
+          auto page = std::unique_ptr<poppler::page>{
+              document->create_page(active_slide)};
+          (*output_buffer)->write() = *make_slide(*page, key);
+          (*output_buffer)->done_writing();
+        }
+      } else {
+        std::cerr << "Slide out of bounds\n";
       }
     } else {
-      std::cerr << "Slide out of bounds\n";
+      std::cerr << "No document\n";
     }
   };
 
-  auto reload_document = [&] {
+  auto reload_thumbnails = [&] {
     if (document) {
-      slides.clear();
-      slides.resize(static_cast<std::size_t>(document->pages()));
       thumbnails.clear();
       thumbnails.reserve(static_cast<std::size_t>(document->pages()));
 
       for (auto i = 0; i < document->pages(); i += 1) {
-        auto &thumbnail_ = thumbnails.emplace_back(i, active_slide);
         auto page = std::unique_ptr<poppler::page>{document->create_page(i)};
-        convert_slide(*page, slides[static_cast<std::size_t>(i)], thumbnail_,
-                      key);
+        thumbnails.push_back(
+            thumbnail{i, active_slide, make_thumbnail(*page, key)});
       }
 
       active_slide = 0;
@@ -530,9 +553,9 @@ int main(int argc, char **argv) {
   };
 
   auto http_delegate_ = std::make_shared<
-      http_delegate<decltype(write_frame), decltype(reload_document)>>(
+      http_delegate<decltype(write_frame), decltype(reload_thumbnails)>>(
       name, root_dir, document, thumbnails, active_slide, key, write_frame,
-      reload_document);
+      reload_thumbnails);
   auto server_ = server{http_delegate_, websocket_delegate_, "0.0.0.0", 0, 4};
 
   http_delegate_->reload_clients = reload_clients;
@@ -547,7 +570,7 @@ int main(int argc, char **argv) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("input_{port}", "port"_a = server_.port()));
+      fmt::format("/input_{port}", "port"_a = server_.port()));
 
   while (true) {
     std::this_thread::sleep_for(1h);

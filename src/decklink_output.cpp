@@ -168,7 +168,7 @@ public:
     }
 
     auto typed_buffer = static_cast<uint8_t *>(data);
-    std::copy(buffer.video_frame.begin(), buffer.video_frame.end(),
+    std::copy(std::begin(buffer.video_frame), std::end(buffer.video_frame),
               typed_buffer);
 
     decklink_output->DisplayVideoFrameSync(frame.get());
@@ -176,8 +176,8 @@ public:
     uint32_t audio_samples_written;
     decklink_output->WriteAudioSamplesSync(
         const_cast<void *>(
-            reinterpret_cast<void const *>(buffer.audio_frame.data())),
-        buffer.audio_frame.size(), &audio_samples_written);
+            reinterpret_cast<void const *>(buffer.audio_frame)),
+        sizeof(buffer.audio_frame), &audio_samples_written);
     std::cout << "Written: " << audio_samples_written << '\n';
   }
 };
@@ -431,7 +431,7 @@ int main(int argc, char **argv) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("output_{port}", "port"_a = server_.port()));
+      fmt::format("/output_{port}", "port"_a = server_.port()));
 
   auto nextFrame = std::chrono::steady_clock::now();
 

@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
 
   auto reload_sender = [&] {
     auto const send_create =
-        NDIlib_send_create_t{name.c_str(), nullptr, true, true};
+        NDIlib_send_create_t{name.c_str(), nullptr, true, false};
     sender = ndi->send_create(&send_create);
   };
 
@@ -117,20 +117,23 @@ int main(int argc, char **argv) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("output_{port}", "port"_a = server_.port()));
+      fmt::format("/output_{port}", "port"_a = server_.port()));
 
   auto nextFrame = std::chrono::steady_clock::now();
+  auto lastFrame = std::chrono::steady_clock::now();
 
   while (true) {
-    std::this_thread::sleep_until(nextFrame);
+  auto thisFrame = std::chrono::steady_clock::now();
+    std::cerr << std::chrono::duration_cast<std::chrono::milliseconds>(thisFrame - lastFrame).count() << "ms\n";
+    lastFrame = thisFrame;
+
+    //std::this_thread::sleep_until(nextFrame);
+    nextFrame += 40ms;
 
     if (input_buffer) {
-      while (!(*input_buffer)->novel_to_read()) {
-      }
-
       (*input_buffer)->about_to_read();
 
-      auto frame = NDIlib_video_frame_v2_t{
+      auto video_frame = NDIlib_video_frame_v2_t{
           triple_buffer::width,
           triple_buffer::height,
           NDIlib_FourCC_type_BGRA,
@@ -139,13 +142,45 @@ int main(int argc, char **argv) {
           0.0f,
           NDIlib_frame_format_type_progressive,
           0,
-          const_cast<uint8_t *>((*input_buffer)->read().video_frame.data()),
+          const_cast<uint8_t *>((*input_buffer)->read().video_frame),
           triple_buffer::pitch};
 
-      // Using the async version would require holding the lock too long
-      ndi->send_send_video_v2(sender, &frame);
-    }
+      static constexpr auto audio_channel_stride =
+          triple_buffer::audio_samples_per_frame / triple_buffer::num_channels;
+      auto audio_frame_float32_planar =
+          std::array<float, triple_buffer::audio_samples_per_frame>{};
 
-    nextFrame = std::chrono::steady_clock::now() + 40ms;
+      for (std::size_t i = 0; i < triple_buffer::audio_samples_per_frame;
+           i += 1) {
+        auto sample = i / triple_buffer::num_channels;
+        auto channel = i % triple_buffer::num_channels;
+
+        static constexpr auto audio_conversion_factor =
+            static_cast<float>((std::numeric_limits<int32_t>::max)());
+
+        audio_frame_float32_planar[channel * audio_channel_stride + sample] =
+            static_cast<float>(
+                (*input_buffer)
+                    ->read()
+                    .audio_frame[sample * triple_buffer::num_channels +
+                                 channel]) /
+            audio_conversion_factor;
+
+        //audio_frame_float32_planar[channel * audio_channel_stride + sample] = static_cast<float>(i * 10 % triple_buffer::audio_samples_per_frame) / triple_buffer::audio_samples_per_frame;
+      }
+
+      auto audio_frame = NDIlib_audio_frame_v3_t{
+          triple_buffer::sample_rate,
+          triple_buffer::num_channels,
+          triple_buffer::audio_samples_per_frame / triple_buffer::num_channels,
+          NDIlib_send_timecode_synthesize,
+          NDIlib_FourCC_type_FLTP,
+          reinterpret_cast<uint8_t *>(audio_frame_float32_planar.data()),
+          audio_channel_stride * sizeof(float)};
+
+      // Using the async version would require holding the lock too long
+      ndi->send_send_video_v2(sender, &video_frame);
+      ndi->send_send_audio_v3(sender, &audio_frame);
+    }
   }
 }

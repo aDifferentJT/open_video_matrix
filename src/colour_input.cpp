@@ -133,7 +133,7 @@ int main(int, char **) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("input_{port}", "port"_a = server_.port()));
+      fmt::format("/input_{port}", "port"_a = server_.port()));
 
   while (true) {
     std::this_thread::sleep_for(1h);

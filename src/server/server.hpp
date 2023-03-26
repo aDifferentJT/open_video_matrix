@@ -52,7 +52,7 @@ public:
 
   auto connect_to_websocket(std::shared_ptr<websocket::delegate> _delegate,
                             char const *address, unsigned short port,
-                            std::string_view target, std::any user_data = {})
+                            std::string target, std::any user_data = {})
       -> std::shared_ptr<websocket::session> {
     return websocket::connect_to_server(std::move(_delegate),
                                         {net::ip::make_address(address), port},

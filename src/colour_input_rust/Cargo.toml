@@ -1,0 +1,18 @@
+[package]
+name = "colour_input"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+axum = "0.6.11"
+dioxus = { version = "^0.3.0", features = ["html"] }
+dioxus-liveview = { version = "^0.3.0", features = ["axum"] }
+flume = "0.10.14"
+futures = "0.3.27"
+ipc_shared_object = { path = "../ipc_shared_object_rust" }
+tokio = { version = "1.26.0", features = ["full"] }
+tokio-tungstenite = "0.18.0"
+triple_buffer = { path = "../triple_buffer_rust" }
+tungstenite = "0.18.0"

@@ -125,7 +125,7 @@ public:
   auto GetPixelFormat() -> BMDPixelFormat override { return bmdFormat8BitBGRA; }
   auto GetFlags() -> BMDFrameFlags override { return bmdFrameFlagDefault; }
   auto GetBytes(void **_buffer) -> HRESULT override {
-    *_buffer = buffer.video_frame.begin();
+    *_buffer = buffer.video_frame;
     return S_OK;
   }
   auto GetTimecode(BMDTimecodeFormat format, IDeckLinkTimecode **timecode)
@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("input_{port}", "port"_a = server_.port()));
+      fmt::format("/input_{port}", "port"_a = server_.port()));
 
   while (true) {
     std::this_thread::sleep_for(1h);

@@ -17,17 +17,24 @@ public:
   static constexpr auto height = 1080;
   static constexpr auto size = pitch * height;
 
-  using video_frame_t = std::array<uint8_t, size>;
+  using video_frame_t = uint8_t[size];
 
   static constexpr auto sample_rate = 48'000;
   static constexpr auto frame_rate = 25;
   static constexpr auto num_channels = 2;
-  static constexpr auto audio_samples_per_frame = sample_rate * num_channels / frame_rate;
-  using audio_frame_t = std::array<int32_t, audio_samples_per_frame>;
+  static constexpr auto audio_samples_per_frame =
+      sample_rate * num_channels / frame_rate;
+
+  using audio_frame_t = int32_t[audio_samples_per_frame];
 
   struct buffer {
-    video_frame_t video_frame;
-    audio_frame_t audio_frame;
+    uint8_t video_frame[size];
+    int32_t audio_frame[audio_samples_per_frame];
+
+    void clear() {
+      std::fill(std::begin(video_frame), std::end(video_frame), 0);
+      std::fill(std::begin(audio_frame), std::end(audio_frame), 0);
+    }
   };
 
 private:

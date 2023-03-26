@@ -41,8 +41,9 @@ void alpha_over(triple_buffer::video_frame_t &dst,
 void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
   alpha_over(dst.video_frame, src.video_frame);
 
-  std::transform(src.audio_frame.begin(), src.audio_frame.end(),
-                 dst.audio_frame.begin(), dst.audio_frame.begin(), std::plus{});
+//  std::transform(std::begin(src.audio_frame), std::end(src.audio_frame),
+//                 std::begin(dst.audio_frame), std::begin(dst.audio_frame), std::plus{});
+  std::copy(std::begin(src.audio_frame), std::end(src.audio_frame), std::begin(dst.audio_frame));
 }
 
 class io_device {
@@ -156,12 +157,11 @@ public:
     inputs.push_back(std::move(input));
   }
 
-  void add_output(std::weak_ptr<output_device> _output) {
-    if (auto output = _output.lock()) {
-      output->write() = {};
+  void add_output(std::shared_ptr<output_device> output) {
+            auto empty = std::make_unique<triple_buffer::buffer>();
+      output->write().clear();
       output->done_writing();
       outputs.push_back(output);
-    }
   }
 
   void remove_input(std::string_view name) {
@@ -280,7 +280,7 @@ public:
 
       for (auto &_output : outputs) {
         if (auto output = _output.lock()) {
-          output->write() = {};
+          output->write().clear();
         }
       }
       for (auto &_input : inputs) {
@@ -376,7 +376,7 @@ public:
       -> std::any override {
     auto target = std::string{_target};
     if (auto matches = std::smatch{};
-        std::regex_match(target, matches, std::regex{R"(input_(\d*))"})) {
+        std::regex_match(target, matches, std::regex{R"(/input_(\d*))"})) {
       auto port = static_cast<unsigned short>(std::stoi(matches[1]));
       auto device = std::make_shared<input_device>(port);
       websocket::send(client.shared_from_this(),
@@ -384,7 +384,7 @@ public:
       _matrix.add_input(device);
       return device;
     } else if (auto matches = std::smatch{}; std::regex_match(
-                   target, matches, std::regex{R"(output_(\d*))"})) {
+                   target, matches, std::regex{R"(/output_(\d*))"})) {
       auto port = static_cast<unsigned short>(std::stoi(matches[1]));
       auto device = std::make_shared<output_device>(port);
       websocket::send(client.shared_from_this(),

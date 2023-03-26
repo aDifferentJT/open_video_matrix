@@ -104,7 +104,7 @@ public:
 
   friend auto connect_to_server(std::shared_ptr<delegate> _delegate,
                                 net::ip::basic_endpoint<tcp> endpoint,
-                                std::string_view target, net::io_context &ioc,
+                                std::string target, net::io_context &ioc,
                                 std::any user_data) -> std::shared_ptr<session>;
 
   friend void send(std::shared_ptr<session> self,
@@ -159,7 +159,7 @@ run(std::shared_ptr<delegate> _delegate, tcp::socket &&socket,
 }
 
 inline auto connect_to_server(std::shared_ptr<delegate> _delegate,
-                              tcp::endpoint endpoint, std::string_view target,
+                              tcp::endpoint endpoint, std::string target,
                               net::io_context &ioc, std::any user_data = {})
     -> std::shared_ptr<session> {
   auto self = std::make_shared<session>(std::move(_delegate), ioc);

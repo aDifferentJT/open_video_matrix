@@ -1,0 +1,16 @@
+[package]
+name = "ipc_shared_object"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+autocxx = "0.25.0"
+cpp = "0.5.7"
+cxx = "1.0.93"
+
+[build-dependencies]
+autocxx-build = "0.25.0"
+cpp_build = "0.5.7"
+miette = { version = "5", features = ["fancy"] }

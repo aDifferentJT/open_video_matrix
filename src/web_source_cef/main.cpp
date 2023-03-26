@@ -202,7 +202,7 @@ public:
     auto typed_buffer = static_cast<uint8_t const *>(buffer);
     if (output_buffer) {
       std::copy(typed_buffer, typed_buffer + triple_buffer::size,
-                (*output_buffer)->write().video_frame.begin());
+                std::begin((*output_buffer)->write().video_frame));
       (*output_buffer)->done_writing();
     }
   }
@@ -415,7 +415,7 @@ auto main(int argc, char **argv) -> int {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("input_{port}", "port"_a = server_.port()));
+      fmt::format("/input_{port}", "port"_a = server_.port()));
 
   CefRunMessageLoop();
 

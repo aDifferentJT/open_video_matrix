@@ -144,7 +144,7 @@ void convert_slide(Magick::Image &img, triple_buffer::buffer &buffer,
     img.extent({triple_buffer::width, triple_buffer::height}, bg_colour,
                Magick::CenterGravity);
     img.write(0, 0, triple_buffer::width, triple_buffer::height, "BGRA",
-              Magick::CharPixel, buffer.video_frame.data());
+              Magick::CharPixel, buffer.video_frame);
 
     img.resize({192, 108});
     auto thumbnail_blob = Magick::Blob{};
@@ -448,7 +448,7 @@ int main(int argc, char **argv) {
       });
   auto router_websocket = server_.connect_to_websocket(
       router_websocket_delegate_, "127.0.0.1", 8080,
-      fmt::format("input_{port}", "port"_a = server_.port()));
+      fmt::format("/input_{port}", "port"_a = server_.port()));
 
   while (true) {
     std::this_thread::sleep_for(1h);

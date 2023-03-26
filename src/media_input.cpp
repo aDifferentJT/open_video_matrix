@@ -336,9 +336,8 @@ private:
 
   std::chrono::steady_clock::time_point start_time;
 
-  // Endianness seems to be backwards
   av::VideoRescaler video_rescaler = {triple_buffer::width,
-                                      triple_buffer::height, AV_PIX_FMT_RGB32};
+                                      triple_buffer::height, AV_PIX_FMT_BGRA};
 
   av::AudioResampler audio_resampler;
 
