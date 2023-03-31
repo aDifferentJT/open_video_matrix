@@ -19,10 +19,11 @@ pub const SIZE: usize = PITCH * HEIGHT;
 pub const SAMPLE_RATE: usize = 48_000;
 pub const FRAME_RATE: usize = 25;
 pub const NUM_CHANNELS: usize = 2;
-pub const AUDIO_SAMPLES_PER_FRAME: usize = SAMPLE_RATE * NUM_CHANNELS / FRAME_RATE;
+pub const AUDIO_SAMPLES_PER_FRAME_PER_CHANNEL: usize = SAMPLE_RATE / FRAME_RATE;
+pub const AUDIO_SAMPLES_PER_FRAME_ALL_CHANNELS: usize = AUDIO_SAMPLES_PER_FRAME_PER_CHANNEL * NUM_CHANNELS;
 
 pub type VideoFrame = [u8; SIZE];
-pub type AudioFrame = [i32; AUDIO_SAMPLES_PER_FRAME];
+pub type AudioFrame = [i32; AUDIO_SAMPLES_PER_FRAME_ALL_CHANNELS];
 
 pub struct TripleBuffer<'a> {
     data: Pin<&'a mut CppTripleBuffer>,
@@ -43,6 +44,14 @@ impl TripleBuffer<'_> {
 
     pub fn done_writing(&mut self) {
         unsafe { self.data.as_mut().done_writing() }
+    }
+
+    pub fn trigger_sync(&mut self) {
+        unsafe { self.data.as_mut().trigger_sync() }
+    }
+
+    pub fn wait_for_sync(&mut self) {
+        unsafe { self.data.as_mut().wait_for_sync() }
     }
 
     pub fn read<'a>(&'a self) -> &'a Buffer {

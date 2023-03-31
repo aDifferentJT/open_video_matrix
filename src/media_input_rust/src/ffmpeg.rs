@@ -169,8 +169,66 @@ impl Stream {
     }
 }
 
-pub struct Demuxer {
+struct DemuxerIO<T> {
+    stream: Box<T>,
+    context: *mut ffmpeg_c::AVIOContext,
+}
+
+impl<T: std::io::Read> DemuxerIO<T> {
+    extern "C" fn read_c(
+        opaque: *mut core::ffi::c_void,
+        buf: *mut u8,
+        buf_size: core::ffi::c_int,
+    ) -> core::ffi::c_int {
+        unsafe {
+            let stream = core::mem::transmute::<*mut core::ffi::c_void, &mut T>(opaque);
+            let buf = core::slice::from_raw_parts_mut(buf, buf_size as usize);
+            match stream.read(buf) {
+                Ok(bytes_read) => bytes_read as core::ffi::c_int,
+                Err(_) => Error::EOF.raw,
+            }
+        }
+    }
+
+    fn from_read_stream(stream: T) -> DemuxerIO<T> {
+        unsafe {
+            let mut stream = Box::new(stream);
+
+            let buffer_len = 4096;
+            let buffer = ffmpeg_c::av_malloc(4096) as *mut u8;
+            assert!(!buffer.is_null());
+
+            let context = ffmpeg_c::avio_alloc_context(
+                buffer,
+                buffer_len,
+                0,
+                core::mem::transmute::<&mut T, *mut core::ffi::c_void>(&mut *stream),
+                Some(DemuxerIO::<T>::read_c),
+                None,
+                None,
+            );
+            assert!(!context.is_null());
+
+            DemuxerIO {
+                stream: stream,
+                context: context,
+            }
+        }
+    }
+}
+
+impl<T> Drop for DemuxerIO<T> {
+    fn drop(&mut self) {
+        unsafe {
+            ffmpeg_c::av_free(self.context as *mut core::ffi::c_void);
+            ffmpeg_c::av_free((*self.context).buffer as *mut core::ffi::c_void);
+        }
+    }
+}
+
+pub struct Demuxer<T> {
     context: *mut ffmpeg_c::AVFormatContext,
+    io: Option<DemuxerIO<T>>,
 }
 
 pub enum MediaType {
@@ -178,8 +236,8 @@ pub enum MediaType {
     Audio,
 }
 
-impl Demuxer {
-    pub fn open_file(path: &str) -> Result<Demuxer, Error> {
+impl Demuxer<()> {
+    pub fn open_file(path: &str) -> Result<Demuxer<()>, Error> {
         unsafe {
             let path_c = std::ffi::CString::new(path).unwrap();
             let mut context = core::ptr::null_mut();
@@ -193,10 +251,40 @@ impl Demuxer {
                 context,
                 core::ptr::null_mut(),
             ))?;
-            Ok(Demuxer { context: context })
+            Ok(Demuxer {
+                context: context,
+                io: None,
+            })
         }
     }
+}
 
+impl<T: std::io::Read> Demuxer<T> {
+    pub fn from_read_stream(stream: T) -> Result<Demuxer<T>, Error> {
+        unsafe {
+            let io_context = DemuxerIO::from_read_stream(stream);
+
+            let mut context = ffmpeg_c::avformat_alloc_context();
+            (*context).pb = io_context.context;
+            catch_error(ffmpeg_c::avformat_open_input(
+                &mut context,
+                b"\0" as *const u8 as *const i8,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+            ))?;
+            catch_error(ffmpeg_c::avformat_find_stream_info(
+                context,
+                core::ptr::null_mut(),
+            ))?;
+            Ok(Demuxer {
+                context: context,
+                io: Some(io_context),
+            })
+        }
+    }
+}
+
+impl<T> Demuxer<T> {
     fn streams<'a>(&'a self) -> &'a [*mut ffmpeg_c::AVStream] {
         unsafe {
             core::slice::from_raw_parts(
@@ -244,7 +332,7 @@ impl Demuxer {
     }
 }
 
-impl Drop for Demuxer {
+impl<T> Drop for Demuxer<T> {
     fn drop(&mut self) {
         unsafe {
             ffmpeg_c::avformat_close_input(&mut self.context);

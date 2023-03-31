@@ -9,6 +9,7 @@ edition = "2021"
 ac-ffmpeg = "0.18.1"
 axum = "0.6.11"
 bytes = "1.4.0"
+collect_slice = "1.2.0"
 dioxus = { version = "^0.3.0", features = ["html"] }
 dioxus-liveview = { version = "^0.3.0", features = ["axum"] }
 flume = "0.10.14"

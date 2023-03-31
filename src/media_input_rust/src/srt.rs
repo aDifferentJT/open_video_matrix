@@ -1,3 +1,5 @@
+use collect_slice::CollectSlice;
+
 use crate::srt_c;
 
 fn get_last_error() -> String {
@@ -17,6 +19,7 @@ pub fn startup() {
 
 pub struct SrtSocket {
     raw: srt_c::SRTSOCKET,
+    queue: std::collections::VecDeque<u8>,
 }
 
 impl SrtSocket {
@@ -24,7 +27,7 @@ impl SrtSocket {
         unsafe {
             let raw = srt_c::srt_create_socket();
 
-            let blocking = true;
+            let blocking = false;
             if srt_c::SRT_ERROR
                 == srt_c::srt_setsockflag(
                     raw,
@@ -36,7 +39,10 @@ impl SrtSocket {
                 return Err(get_last_error());
             }
 
-            Ok(SrtSocket { raw: raw })
+            Ok(SrtSocket {
+                raw: raw,
+                queue: std::collections::VecDeque::new(),
+            })
         }
     }
 }
@@ -50,12 +56,12 @@ impl Drop for SrtSocket {
 }
 
 impl SrtSocket {
-    pub fn connect(&mut self, name: &str, port: u16) -> Result<(), String> {
+    pub fn connect(&mut self, name: &str, port: u16) -> Result<(), std::io::Error> {
         unsafe {
             let name_c = std::ffi::CString::new(name).unwrap();
             let mut addr = srt_c::in_addr { s_addr: 0 };
             match srt_c::inet_aton(name_c.as_ptr(), &mut addr) {
-                0 => return Err(format!("Invalid address: {name}")),
+                0 => return Err(std::io::Error::other(format!("Invalid address: {name}"))),
                 _ => (),
             }
             let name = srt_c::sockaddr_in {
@@ -73,14 +79,20 @@ impl SrtSocket {
                     std::mem::size_of_val(&name) as core::ffi::c_int,
                 )
             {
-                return Err(get_last_error());
+                return Err(std::io::Error::other(get_last_error()));
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            while self.queue.len() < 100_000 {
+                self.recv_into_queue()?;
             }
 
             Ok(())
         }
     }
 
-    fn recv_sync(&mut self) -> Result<Vec<i8>, String> {
+    fn recv_into_queue(&mut self) -> Result<(), std::io::Error> {
         unsafe {
             let mut max_size: i32 = 0;
             let mut max_size_len: core::ffi::c_int = 0;
@@ -92,52 +104,27 @@ impl SrtSocket {
             );
             assert!(max_size_len == std::mem::size_of_val(&max_size) as core::ffi::c_int);
 
-            let mut data = Vec::with_capacity(max_size as usize);
+            let mut data = std::collections::VecDeque::with_capacity(max_size as usize);
             data.resize(max_size as usize, 0);
 
-            match srt_c::srt_recv(self.raw, data.as_mut_ptr(), max_size) {
-                srt_c::SRT_ERROR => return Err(get_last_error()),
-                0 => return Err("Socket closed".to_string()),
+            let data_slice = data.make_contiguous();
+
+            match srt_c::srt_recv(self.raw, data_slice.as_mut_ptr() as *mut i8, max_size) {
+                srt_c::SRT_ERROR => {
+                    let mut system_errno: core::ffi::c_int = 0;
+                    let srt_errno = srt_c::srt_getlasterror(&mut system_errno);
+
+                    if srt_errno == srt_c::SRT_ERRNO_SRT_EASYNCRCV {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other(get_last_error()))
+                    }
+                }
+                0 => Err(std::io::Error::other("Socket closed".to_string())),
                 size => {
                     data.truncate(size as usize);
-                    return Ok(data);
-                }
-            }
-        }
-    }
-
-    async fn recv_async(&mut self) -> Result<Vec<i8>, String> {
-        unsafe {
-            let mut max_size: i32 = 0;
-            let mut max_size_len: core::ffi::c_int = 0;
-            srt_c::srt_getsockflag(
-                self.raw,
-                srt_c::SRT_SOCKOPT_SRTO_PAYLOADSIZE,
-                std::mem::transmute::<*mut i32, *mut core::ffi::c_void>(&mut max_size),
-                &mut max_size_len,
-            );
-            assert!(max_size_len == std::mem::size_of_val(&max_size) as core::ffi::c_int);
-
-            let mut data = Vec::with_capacity(max_size as usize);
-            data.resize(max_size as usize, 0);
-
-            loop {
-                match srt_c::srt_recv(self.raw, data.as_mut_ptr(), max_size) {
-                    srt_c::SRT_ERROR => {
-                        let mut system_errno: core::ffi::c_int = 0;
-                        let srt_errno = srt_c::srt_getlasterror(&mut system_errno);
-
-                        if srt_errno == srt_c::SRT_ERRNO_SRT_EASYNCRCV {
-                            tokio::task::yield_now().await;
-                        } else {
-                            return Err(get_last_error());
-                        }
-                    }
-                    0 => return Err("Socket closed".to_string()),
-                    size => {
-                        data.truncate(size as usize);
-                        return Ok(data);
-                    }
+                    self.queue.append(&mut data);
+                    Ok(())
                 }
             }
         }
@@ -146,18 +133,16 @@ impl SrtSocket {
 
 impl std::io::Read for SrtSocket {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        unsafe {
-            match srt_c::srt_recv(
-                self.raw,
-                std::mem::transmute::<*mut u8, *mut i8>(buf.as_mut_ptr()),
-                buf.len() as core::ffi::c_int,
-            ) {
-                srt_c::SRT_ERROR => return Err(std::io::Error::other(get_last_error())),
-                0 => return Err(std::io::Error::other("Socket closed".to_string())),
-                size => {
-                    return Ok(size as usize);
-                }
+        // do while loop
+        loop {
+            self.recv_into_queue()?;
+            if self.queue.len() > 0 {
+                break;
             }
         }
+
+        let bytes_read = core::cmp::min(self.queue.len(), buf.len());
+        self.queue.drain(0..bytes_read).collect_slice_exhaust(buf);
+        return Ok(bytes_read);
     }
 }

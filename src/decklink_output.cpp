@@ -133,7 +133,8 @@ public:
     }
 
     if (decklink_output->EnableAudioOutput(
-            bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger, 2,
+            bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger,
+            triple_buffer::num_channels,
             bmdAudioOutputStreamContinuous) != S_OK) {
       std::cerr << "Could not enable audio output\n";
       std::terminate();
@@ -175,10 +176,9 @@ public:
 
     uint32_t audio_samples_written;
     decklink_output->WriteAudioSamplesSync(
-        const_cast<void *>(
-            reinterpret_cast<void const *>(buffer.audio_frame)),
-        sizeof(buffer.audio_frame), &audio_samples_written);
-    std::cout << "Written: " << audio_samples_written << '\n';
+        const_cast<void *>(reinterpret_cast<void const *>(buffer.audio_frame)),
+        triple_buffer::audio_samples_per_frame_per_channel,
+        &audio_samples_written);
   }
 };
 
@@ -433,11 +433,7 @@ int main(int argc, char **argv) {
       router_websocket_delegate_, "127.0.0.1", 8080,
       fmt::format("/output_{port}", "port"_a = server_.port()));
 
-  auto nextFrame = std::chrono::steady_clock::now();
-
   while (true) {
-    std::this_thread::sleep_until(nextFrame);
-
     if (input_buffer) {
       while (!(*input_buffer)->novel_to_read()) {
       }
@@ -447,8 +443,10 @@ int main(int argc, char **argv) {
       if (decklink) {
         decklink->display_frame((*input_buffer)->read());
       }
-    }
 
-    nextFrame = std::chrono::steady_clock::now() + 40ms;
+      (*input_buffer)->wait_for_sync();
+    } else {
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
   }
 }

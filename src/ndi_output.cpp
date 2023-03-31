@@ -119,17 +119,7 @@ int main(int argc, char **argv) {
       router_websocket_delegate_, "127.0.0.1", 8080,
       fmt::format("/output_{port}", "port"_a = server_.port()));
 
-  auto nextFrame = std::chrono::steady_clock::now();
-  auto lastFrame = std::chrono::steady_clock::now();
-
   while (true) {
-  auto thisFrame = std::chrono::steady_clock::now();
-    std::cerr << std::chrono::duration_cast<std::chrono::milliseconds>(thisFrame - lastFrame).count() << "ms\n";
-    lastFrame = thisFrame;
-
-    //std::this_thread::sleep_until(nextFrame);
-    nextFrame += 40ms;
-
     if (input_buffer) {
       (*input_buffer)->about_to_read();
 
@@ -146,33 +136,33 @@ int main(int argc, char **argv) {
           triple_buffer::pitch};
 
       static constexpr auto audio_channel_stride =
-          triple_buffer::audio_samples_per_frame / triple_buffer::num_channels;
+          triple_buffer::audio_samples_per_frame_per_channel;
       auto audio_frame_float32_planar =
-          std::array<float, triple_buffer::audio_samples_per_frame>{};
+          std::array<float,
+                     triple_buffer::audio_samples_per_frame_all_channels>{};
 
-      for (std::size_t i = 0; i < triple_buffer::audio_samples_per_frame;
-           i += 1) {
-        auto sample = i / triple_buffer::num_channels;
-        auto channel = i % triple_buffer::num_channels;
+      for (std::size_t sample = 0;
+           sample < triple_buffer::audio_samples_per_frame_per_channel;
+           sample += 1) {
+        for (std::size_t channel = 0; channel < triple_buffer::num_channels;
+             channel += 1) {
+          static constexpr auto audio_conversion_factor =
+              static_cast<float>((std::numeric_limits<int32_t>::max)());
 
-        static constexpr auto audio_conversion_factor =
-            static_cast<float>((std::numeric_limits<int32_t>::max)());
-
-        audio_frame_float32_planar[channel * audio_channel_stride + sample] =
-            static_cast<float>(
-                (*input_buffer)
-                    ->read()
-                    .audio_frame[sample * triple_buffer::num_channels +
-                                 channel]) /
-            audio_conversion_factor;
-
-        //audio_frame_float32_planar[channel * audio_channel_stride + sample] = static_cast<float>(i * 10 % triple_buffer::audio_samples_per_frame) / triple_buffer::audio_samples_per_frame;
+          audio_frame_float32_planar[channel * audio_channel_stride + sample] =
+              static_cast<float>(
+                  (*input_buffer)
+                      ->read()
+                      .audio_frame[sample * triple_buffer::num_channels +
+                                   channel]) /
+              audio_conversion_factor;
+        }
       }
 
       auto audio_frame = NDIlib_audio_frame_v3_t{
           triple_buffer::sample_rate,
           triple_buffer::num_channels,
-          triple_buffer::audio_samples_per_frame / triple_buffer::num_channels,
+          triple_buffer::audio_samples_per_frame_per_channel,
           NDIlib_send_timecode_synthesize,
           NDIlib_FourCC_type_FLTP,
           reinterpret_cast<uint8_t *>(audio_frame_float32_planar.data()),
@@ -181,6 +171,8 @@ int main(int argc, char **argv) {
       // Using the async version would require holding the lock too long
       ndi->send_send_video_v2(sender, &video_frame);
       ndi->send_send_audio_v3(sender, &audio_frame);
+    } else {
+      std::atomic_thread_fence(std::memory_order_seq_cst);
     }
   }
 }

@@ -41,9 +41,11 @@ void alpha_over(triple_buffer::video_frame_t &dst,
 void alpha_over(triple_buffer::buffer &dst, triple_buffer::buffer const &src) {
   alpha_over(dst.video_frame, src.video_frame);
 
-//  std::transform(std::begin(src.audio_frame), std::end(src.audio_frame),
-//                 std::begin(dst.audio_frame), std::begin(dst.audio_frame), std::plus{});
-  std::copy(std::begin(src.audio_frame), std::end(src.audio_frame), std::begin(dst.audio_frame));
+  //  std::transform(std::begin(src.audio_frame), std::end(src.audio_frame),
+  //                 std::begin(dst.audio_frame), std::begin(dst.audio_frame),
+  //                 std::plus{});
+  std::copy(std::begin(src.audio_frame), std::end(src.audio_frame),
+            std::begin(dst.audio_frame));
 }
 
 class io_device {
@@ -78,6 +80,9 @@ public:
 
   void done_writing() { device->done_writing(); }
   auto write() -> triple_buffer::buffer & { return device->write(); }
+
+  void trigger_sync() { device->trigger_sync(); }
+  void wait_for_sync() { device->wait_for_sync(); }
 };
 
 class input_device {
@@ -95,6 +100,9 @@ public:
 
   void about_to_read() { device->about_to_read(); }
   auto read() const -> triple_buffer::buffer const & { return device->read(); }
+
+  void trigger_sync() { device->trigger_sync(); }
+  void wait_for_sync() { device->wait_for_sync(); }
 
   auto has_output(output_device const *output) -> bool {
     for (auto &output2 : outputs) {
@@ -158,10 +166,10 @@ public:
   }
 
   void add_output(std::shared_ptr<output_device> output) {
-            auto empty = std::make_unique<triple_buffer::buffer>();
-      output->write().clear();
-      output->done_writing();
-      outputs.push_back(output);
+    auto empty = std::make_unique<triple_buffer::buffer>();
+    output->write().clear();
+    output->done_writing();
+    outputs.push_back(output);
   }
 
   void remove_input(std::string_view name) {
@@ -257,10 +265,11 @@ public:
   }
 
   void run(auto duration) {
-    auto nextFrame = std::chrono::steady_clock::time_point{};
+    auto nextFrame = std::chrono::steady_clock::now();
 
     while (true) {
-      nextFrame = std::chrono::steady_clock::now() + duration;
+      std::this_thread::sleep_until(nextFrame);
+      nextFrame += duration;
 
       std::erase_if(inputs, [](std::weak_ptr<input_device> const &input) {
         return input.expired();
@@ -300,8 +309,16 @@ public:
           output->done_writing();
         }
       }
-
-      std::this_thread::sleep_until(nextFrame);
+      for (auto &_input : inputs) {
+        if (auto input = _input.lock()) {
+          input->trigger_sync();
+        }
+      }
+      for (auto &_output : outputs) {
+        if (auto output = _output.lock()) {
+          output->trigger_sync();
+        }
+      }
     }
   }
 };

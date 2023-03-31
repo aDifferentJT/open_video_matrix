@@ -5,6 +5,7 @@
 #include <utility>
 
 #include <boost/interprocess/offset_ptr.hpp>
+#include <boost/interprocess/sync/interprocess_condition_any.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/interprocess/sync/scoped_lock.hpp>
 
@@ -22,14 +23,16 @@ public:
   static constexpr auto sample_rate = 48'000;
   static constexpr auto frame_rate = 25;
   static constexpr auto num_channels = 2;
-  static constexpr auto audio_samples_per_frame =
-      sample_rate * num_channels / frame_rate;
+  static constexpr auto audio_samples_per_frame_per_channel =
+      sample_rate / frame_rate;
+  static constexpr auto audio_samples_per_frame_all_channels =
+      audio_samples_per_frame_per_channel * num_channels;
 
-  using audio_frame_t = int32_t[audio_samples_per_frame];
+  using audio_frame_t = int32_t[audio_samples_per_frame_all_channels];
 
   struct buffer {
     uint8_t video_frame[size];
-    int32_t audio_frame[audio_samples_per_frame];
+    int32_t audio_frame[audio_samples_per_frame_all_channels];
 
     void clear() {
       std::fill(std::begin(video_frame), std::end(video_frame), 0);
@@ -39,6 +42,7 @@ public:
 
 private:
   ipc::interprocess_mutex mutex;
+  ipc::interprocess_condition_any sync;
 
   std::array<buffer, 3> buffers;
   ipc::offset_ptr<buffer> _read;
@@ -51,7 +55,7 @@ public:
       : buffers{}, _read{&buffers[0]}, read_next{&buffers[0]},
         _write{&buffers[1]}, write_next{&buffers[2]} {}
 
-  auto novel_to_read() {
+  auto novel_to_read() const {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     return _read != read_next;
   }
@@ -74,6 +78,19 @@ public:
 
   auto read() const -> buffer const & { return *_read; }
   auto write() -> buffer & { return *_write; }
+
+  void trigger_sync() { sync.notify_all(); }
+
+  void wait_for_sync() {
+    struct dummy_lock {
+      bool locked = true;
+      void lock() { locked = true; }
+      void unlock() { locked = false; }
+      operator bool() const { return locked; }
+    };
+    auto lock = dummy_lock{};
+    sync.wait(lock);
+  }
 };
 
 #endif // TRIPLE_BUFFER_HPP

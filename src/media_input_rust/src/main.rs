@@ -148,45 +148,19 @@ async fn renderer(
         IpcUnmanagedObject::new(name);
     let mut output_buffer = TripleBuffer::new(cpp_output_buffer.get_mut());
 
+    /*
     let mut media =
         MediaStream::open_file("/Users/jonathantanner/Downloads/2021-06-14 20-04-31.mp4").unwrap();
+        */
     //let mut media = open_srt("35.178.107.156", 30000).await.unwrap();
-    //let mut media = open_srt("127.0.0.1", 30000).await.unwrap();
+    let mut media = MediaStream::open_srt("127.0.0.1", 30000).unwrap();
 
-    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1000 / 25));
+    tokio::time::sleep(core::time::Duration::from_secs(1));
+
     loop {
-        /*
-        let Some(frame) = media.get_next_video_frame().unwrap() else { break; };
-
-        let frame = scaler.scale(&frame).unwrap();
-
-        println!("Got frame");
-
-        output_buffer
-            .write()
-            .video_frame
-            .copy_from_slice(frame.planes().first().unwrap().data());
-        */
-
         media.get_next_triple_buffer(output_buffer.write()).unwrap();
-
-        /*
-        for x in output_buffer.write().audio_frame {
-            if x > 1000000000 {
-                println!("{}", x);
-            }
-        }
-        */
-
-        /*
-                for i in 0..triple_buffer::AUDIO_SAMPLES_PER_FRAME {
-        output_buffer.write().audio_frame[i] = ((i * 5 % triple_buffer::AUDIO_SAMPLES_PER_FRAME) * ((i32::MAX / 100) as usize / triple_buffer::AUDIO_SAMPLES_PER_FRAME)) as i32;
-                }
-                */
-
         output_buffer.done_writing();
-
-        let _ = ticker.tick().await;
+        output_buffer.wait_for_sync();
     }
 }
 
@@ -258,20 +232,8 @@ trait Media {
     ) -> Result<bool, ffmpeg::Error>;
 }
 
-struct MediaStream {
-    /*
-    demuxer: ac_ffmpeg::format::demuxer::DemuxerWithStreamInfo<T>,
-    video_stream_index: usize,
-    video_decoder: ac_ffmpeg::codec::video::VideoDecoder,
-    video_scaler: ac_ffmpeg::codec::video::VideoFrameScaler,
-    video_queue: std::collections::VecDeque<ac_ffmpeg::codec::video::VideoFrame>,
-    audio_stream_index: usize,
-    audio_decoder: ac_ffmpeg::codec::audio::AudioDecoder,
-    audio_resampler: ac_ffmpeg::codec::audio::AudioResampler,
-    audio_queue: std::collections::VecDeque<ac_ffmpeg::codec::audio::AudioFrame>,
-    extra_audio_samples: Vec<i32>,
-    */
-    demuxer: ffmpeg::Demuxer,
+struct MediaStream<T> {
+    demuxer: ffmpeg::Demuxer<T>,
     video_stream_index: core::ffi::c_int,
     video_decoder: ffmpeg::Decoder,
     video_scaler: ffmpeg::Scaler,
@@ -280,27 +242,15 @@ struct MediaStream {
     audio_decoder: ffmpeg::Decoder,
     audio_resampler: ffmpeg::Resampler,
     audio_queue: std::collections::VecDeque<ffmpeg::Frame>,
-    extra_audio_samples: Vec<i32>,
 }
 
-impl MediaStream {
-    fn open_file(path: &str) -> Result<MediaStream, ffmpeg::Error> {
-        /*
-        let demuxer = ac_ffmpeg::format::demuxer::Demuxer::builder()
-            .build(io)?
-            .find_stream_info(None)
-            .map_err(|(_, err)| err)?;
-            */
-        let demuxer = ffmpeg::Demuxer::open_file(path)?;
-
+impl<T> MediaStream<T> {
+    fn new(demuxer: ffmpeg::Demuxer<T>) -> Result<MediaStream<T>, ffmpeg::Error> {
         let (video_stream_index, video_stream, video_decoder) =
             demuxer.find_best_stream(ffmpeg::MediaType::Video, -1)?;
 
         let (audio_stream_index, audio_stream, audio_decoder) =
             demuxer.find_best_stream(ffmpeg::MediaType::Audio, video_stream_index)?;
-
-        println!("video stream index: {video_stream_index}");
-        println!("audio stream index: {audio_stream_index}");
 
         let video_scaler = ffmpeg::Scaler::new(
             video_stream.width(),
@@ -320,65 +270,6 @@ impl MediaStream {
             triple_buffer::SAMPLE_RATE as i32,
         )?;
 
-        /*
-        let (video_stream_index, video_stream, video_params) = demuxer
-            .streams()
-            .iter()
-            .map(|stream| (stream, stream.codec_parameters()))
-            .enumerate()
-            .filter_map(|(index, (stream, params))| {
-                Some((index, stream, params.into_video_codec_parameters()?))
-            })
-            .next()
-            .ok_or_else(|| ffmpeg::Error::new("no video stream"))?;
-
-        let video_decoder = ac_ffmpeg::codec::video::VideoDecoder::from_stream(video_stream)?
-            .set_option("pixel_format", "bgra")
-            .build()?;
-
-        let mut video_scaler = ac_ffmpeg::codec::video::scaler::VideoFrameScaler::builder()
-            .source_pixel_format(video_params.pixel_format())
-            .source_width(video_params.width())
-            .source_height(video_params.height())
-            .target_pixel_format(
-                ac_ffmpeg::codec::video::frame::PixelFormat::from_str("bgra").unwrap(),
-            )
-            .target_width(triple_buffer::WIDTH)
-            .target_height(triple_buffer::HEIGHT)
-            .build()?;
-
-        let (audio_stream_index, audio_stream, audio_params) = demuxer
-            .streams()
-            .iter()
-            .map(|stream| (stream, stream.codec_parameters()))
-            .enumerate()
-            .filter_map(|(index, (stream, params))| {
-                Some((index, stream, params.into_audio_codec_parameters()?))
-            })
-            .next()
-            .ok_or_else(|| ffmpeg::Error::new("no audio stream"))?;
-
-        let audio_decoder =
-            ac_ffmpeg::codec::audio::AudioDecoder::from_stream(audio_stream)?.build()?;
-
-        eprintln!("Sample Format: {}", audio_params.sample_format().name());
-        let mut audio_resampler = ac_ffmpeg::codec::audio::resampler::AudioResampler::builder()
-            .source_channel_layout(audio_params.channel_layout().to_owned())
-            .source_sample_format(audio_params.sample_format())
-            .source_sample_rate(audio_params.sample_rate())
-            .target_channel_layout(
-                ac_ffmpeg::codec::audio::frame::ChannelLayout::from_channels(
-                    triple_buffer::NUM_CHANNELS as u32,
-                )
-                .unwrap(),
-            )
-            .target_sample_format(
-                ac_ffmpeg::codec::audio::frame::SampleFormat::from_str("s32").unwrap(),
-            )
-            .target_sample_rate(triple_buffer::SAMPLE_RATE as u32)
-            .build()?;
-            */
-
         Ok(MediaStream {
             demuxer: demuxer,
             video_stream_index: video_stream_index,
@@ -389,43 +280,46 @@ impl MediaStream {
             audio_decoder: audio_decoder,
             audio_resampler: audio_resampler,
             audio_queue: std::collections::VecDeque::new(),
-            extra_audio_samples: Vec::new(),
         })
     }
 }
 
-impl MediaStream {
+impl MediaStream<()> {
+    fn open_file(path: &str) -> Result<MediaStream<()>, ffmpeg::Error> {
+        let demuxer = ffmpeg::Demuxer::open_file(path)?;
+        MediaStream::new(demuxer)
+    }
+}
+
+impl MediaStream<srt::SrtSocket> {
+    fn open_srt(name: &str, port: u16) -> Result<MediaStream<srt::SrtSocket>, ffmpeg::Error> {
+        let mut srt = match srt::SrtSocket::new() {
+            Ok(srt) => srt,
+            Err(err) => panic!("unable to create srt socket: {}", err),
+        };
+        match srt.connect(name, port) {
+            Ok(_) => {}
+            Err(err) => panic!("unable to connect srt {}: {}", name, err),
+        }
+
+        let demuxer = ffmpeg::Demuxer::from_read_stream(srt)?;
+        MediaStream::new(demuxer)
+    }
+}
+
+impl<T> MediaStream<T> {
     fn pump(&mut self) -> Result<bool, ffmpeg::Error> {
         match self.demuxer.read()? {
             Some(packet) => {
                 if packet.stream_index() == self.video_stream_index {
                     self.video_decoder.send(&packet)?;
                     while let Some(frame) = self.video_decoder.receive()? {
-                        let frame = self.video_scaler.scale(&frame)?;
                         self.video_queue.push_back(frame);
                     }
                 } else if packet.stream_index() == self.audio_stream_index {
                     self.audio_decoder.send(&packet)?;
                     while let Some(frame) = self.audio_decoder.receive()? {
                         self.audio_queue.push_back(frame);
-                        /*
-                        self.audio_resampler.push(frame);
-                        while let Some(frame) = self.audio_resampler.take()? {
-                            unsafe {
-                                for x in reinterpret_slice::<u8, i32>(
-                                    frame.planes().first().unwrap().data(),
-                                ) {
-                                    use std::io::Write;
-                                    std::io::stdout().write(::core::slice::from_raw_parts(
-                                        (x as *const i32) as *const u8,
-                                        ::core::mem::size_of::<i32>(),
-                                    ));
-                                }
-                            }
-
-                            self.audio_queue.push_back(frame);
-                        }
-                        */
                     }
                 }
                 Ok(true)
@@ -435,7 +329,7 @@ impl MediaStream {
     }
 }
 
-impl Media for MediaStream {
+impl<T> Media for MediaStream<T> {
     fn get_next_video_frame(
         &mut self,
         dst: &mut triple_buffer::VideoFrame,
@@ -443,6 +337,7 @@ impl Media for MediaStream {
         loop {
             match self.video_queue.pop_front() {
                 Some(frame) => {
+                    let frame = self.video_scaler.scale(&frame)?;
                     dst.copy_from_slice(frame.data());
                     return Ok(true);
                 }
@@ -461,36 +356,10 @@ impl Media for MediaStream {
     ) -> Result<bool, ffmpeg::Error> {
         let mut dst: &mut [i32] = &mut dst[..];
 
-        /*
-        {
-            let src = std::mem::replace(&mut self.extra_audio_samples, Vec::new());
-            match dst.partial_copy_from_slice(&src) {
-                PartialCopyFromSliceResult::Perfect => return Ok(true),
-                PartialCopyFromSliceResult::ExtraDst(extra_dst) => dst = extra_dst,
-                PartialCopyFromSliceResult::ExtraSrc(extra_src) => {
-                    self.extra_audio_samples = extra_src.to_vec();
-                    return Ok(true);
-                }
-            }
-        }
-        */
-
         while dst.len() > 0 {
             match self.audio_queue.pop_front() {
                 Some(frame) => {
                     dst = self.audio_resampler.convert(dst, &frame)?;
-                    /*
-                    let src_planes = frame.planes();
-                    let src = unsafe { reinterpret_slice(src_planes.first().unwrap().data()) };
-                    match dst.partial_copy_from_slice(&src) {
-                        PartialCopyFromSliceResult::Perfect => return Ok(true),
-                        PartialCopyFromSliceResult::ExtraDst(extra_dst) => dst = extra_dst,
-                        PartialCopyFromSliceResult::ExtraSrc(extra_src) => {
-                            self.extra_audio_samples = extra_src.to_vec();
-                            return Ok(true);
-                        }
-                    }
-                    */
                 }
                 None => {
                     if !self.pump()? {
@@ -510,52 +379,3 @@ impl Media for MediaStream {
             && self.get_next_audio_frame(&mut dst.audio_frame)?)
     }
 }
-
-/*
-fn open_file(path: &str) -> Result<MediaStream<std::fs::File>, ffmpeg::Error> {
-    let input = std::fs::File::open(path).map_err(|err| {
-        ffmpeg::Error::new(format!("unable to open input file {}: {}", path, err))
-    })?;
-    MediaStream::new(ac_ffmpeg::format::io::IO::from_seekable_read_stream(input))
-}
-*/
-
-struct ByteChannelReader {
-    channel: tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>,
-}
-
-impl std::io::Read for ByteChannelReader {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        match self.channel.try_recv() {
-            Ok(data) => {
-                buf.copy_from_slice(&data);
-                Ok(data.len())
-            }
-            Err(_) => Ok(0),
-        }
-    }
-}
-
-/*
-async fn open_srt(name: &str, port: u16) -> Result<MediaStream<srt::SrtSocket>, ffmpeg::Error> {
-    let mut srt = srt::SrtSocket::new()
-        .map_err(|err| ffmpeg::Error::new(format!("unable to create srt socket: {}", err)))?;
-    srt.connect(name, port)
-        .map_err(|err| ffmpeg::Error::new(format!("unable to connect srt {}: {}", name, err)))?;
-
-    /*
-    let (send, recv) = tokio::sync::mpsc::unbounded_channel();
-
-    tokio::spawn(async move {
-        loop {
-            let (timestamp, data) = srt.next().await.unwrap().unwrap();
-            send.send(data);
-        }
-    });
-
-    let reader = ByteChannelReader { channel: recv };
-    */
-
-    MediaStream::new(ac_ffmpeg::format::io::IO::from_read_stream(srt))
-}
-*/
