@@ -12,6 +12,7 @@ bytes = "1.4.0"
 collect_slice = "1.2.0"
 dioxus = { version = "^0.3.0", features = ["html"] }
 dioxus-liveview = { version = "^0.3.0", features = ["axum"] }
+ffmpeg = { path = "../ffmpeg" }
 flume = "0.10.14"
 futures = "0.3.27"
 ipc_shared_object = { path = "../ipc_shared_object_rust" }

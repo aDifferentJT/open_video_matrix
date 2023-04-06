@@ -8,9 +8,6 @@ use triple_buffer::TripleBuffer;
 mod srt;
 mod srt_c;
 
-mod ffmpeg;
-mod ffmpeg_c;
-
 enum GuiToRendererMsg {
     SetColour(String),
 }
