@@ -1,5 +1,8 @@
 mod ffmpeg_c;
 
+pub use ffmpeg_c::AVCodecID_AV_CODEC_ID_H264;
+pub use ffmpeg_c::AVRational;
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Error {
     raw: i32,
@@ -123,12 +126,57 @@ impl Packet {
     pub fn stream_index(&self) -> core::ffi::c_int {
         unsafe { (*self.raw).stream_index }
     }
+
+    pub fn data<'a>(&'a self) -> &'a [u8] {
+        unsafe { core::slice::from_raw_parts_mut((*self.raw).data, (*self.raw).size as _) }
+    }
 }
 
 impl Drop for Packet {
     fn drop(&mut self) {
         unsafe {
             ffmpeg_c::av_packet_free(&mut self.raw);
+        }
+    }
+}
+
+pub struct Codec {
+    raw: *const ffmpeg_c::AVCodec,
+}
+
+impl Codec {
+    pub fn find_encoder(codec_id: ffmpeg_c::AVCodecID) -> Option<Codec> {
+        let codec = unsafe { ffmpeg_c::avcodec_find_encoder(codec_id) };
+        if codec.is_null() {
+            None
+        } else {
+            Some(Codec { raw: codec })
+        }
+    }
+
+    pub fn find_encoder_by_name(name: &str) -> Option<Codec> {
+        let name_c = std::ffi::CString::new(name).unwrap();
+        let codec = unsafe { ffmpeg_c::avcodec_find_encoder_by_name(name_c.as_ptr()) };
+        if codec.is_null() {
+            None
+        } else {
+            Some(Codec { raw: codec })
+        }
+    }
+
+    pub fn name<'a>(&'a self) -> &'a str {
+        unsafe {
+            core::ffi::CStr::from_ptr((*self.raw).name)
+                .to_str()
+                .unwrap()
+        }
+    }
+
+    pub fn long_name<'a>(&'a self) -> &'a str {
+        unsafe {
+            core::ffi::CStr::from_ptr((*self.raw).long_name)
+                .to_str()
+                .unwrap()
         }
     }
 }
@@ -340,12 +388,137 @@ impl<T> Drop for Demuxer<T> {
     }
 }
 
+struct MuxerIO<T> {
+    stream: Box<T>,
+    context: *mut ffmpeg_c::AVIOContext,
+}
+
+impl<T: std::io::Write> MuxerIO<T> {
+    extern "C" fn write_c(
+        opaque: *mut core::ffi::c_void,
+        buf: *mut u8,
+        buf_size: core::ffi::c_int,
+    ) -> core::ffi::c_int {
+        unsafe {
+            let stream = core::mem::transmute::<*mut core::ffi::c_void, &mut T>(opaque);
+            let buf = core::slice::from_raw_parts_mut(buf, buf_size as usize);
+            match stream.write(buf) {
+                Ok(bytes_written) => bytes_written as core::ffi::c_int,
+                Err(_) => Error::EOF.raw,
+            }
+        }
+    }
+
+    fn from_write_stream(stream: T) -> MuxerIO<T> {
+        unsafe {
+            let mut stream = Box::new(stream);
+
+            let buffer_len = 4096;
+            let buffer = ffmpeg_c::av_malloc(4096) as *mut u8;
+            assert!(!buffer.is_null());
+
+            let context = ffmpeg_c::avio_alloc_context(
+                buffer,
+                buffer_len,
+                0,
+                core::mem::transmute::<&mut T, *mut core::ffi::c_void>(&mut *stream),
+                None,
+                Some(MuxerIO::<T>::write_c),
+                None,
+            );
+            assert!(!context.is_null());
+
+            MuxerIO {
+                stream: stream,
+                context: context,
+            }
+        }
+    }
+}
+
+impl<T> Drop for MuxerIO<T> {
+    fn drop(&mut self) {
+        unsafe {
+            ffmpeg_c::av_free(self.context as *mut core::ffi::c_void);
+            ffmpeg_c::av_free((*self.context).buffer as *mut core::ffi::c_void);
+        }
+    }
+}
+
+pub struct Muxer<T> {
+    context: *mut ffmpeg_c::AVFormatContext,
+    io: Option<MuxerIO<T>>,
+}
+
+impl<T: std::io::Write> Muxer<T> {
+    pub fn from_write_stream(
+        stream: T,
+        format_name: &str,
+        codec: &Codec,
+    ) -> Result<Muxer<T>, Error> {
+        unsafe {
+            let io_context = MuxerIO::from_write_stream(stream);
+
+            let mut context = ffmpeg_c::avformat_alloc_context();
+
+            let format_name_c = std::ffi::CString::new(format_name).unwrap();
+            (*context).oformat = ffmpeg_c::av_guess_format(
+                format_name_c.as_ptr(),
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+            if (*context).oformat.is_null() {
+                panic!("Cannot guess format");
+            }
+
+            (*context).pb = io_context.context;
+            let stream = ffmpeg_c::avformat_new_stream(context, codec.raw);
+            (*(*stream).codecpar).codec_type = ffmpeg_c::AVMediaType_AVMEDIA_TYPE_VIDEO;
+            (*(*stream).codecpar).bit_rate = 1000000;
+            (*(*stream).codecpar).width = 1920;
+            (*(*stream).codecpar).height = 1080;
+
+            catch_error(ffmpeg_c::avformat_write_header(
+                context,
+                core::ptr::null_mut(),
+            ))?;
+            Ok(Muxer {
+                context: context,
+                io: Some(io_context),
+            })
+        }
+    }
+}
+
+impl<T> Muxer<T> {
+    pub fn write(&mut self, packet: Packet) -> Result<(), Error> {
+        unsafe {
+            match catch_error(ffmpeg_c::av_interleaved_write_frame(
+                self.context,
+                packet.raw,
+            )) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+    }
+}
+
+impl<T> Drop for Muxer<T> {
+    fn drop(&mut self) {
+        unsafe {
+            ffmpeg_c::av_write_trailer(self.context);
+            ffmpeg_c::avformat_free_context(self.context);
+        }
+    }
+}
+
 pub struct Frame {
     raw: *mut ffmpeg_c::AVFrame,
 }
 
 impl Frame {
-    fn new() -> Frame {
+    pub fn new() -> Frame {
         unsafe {
             Frame {
                 raw: ffmpeg_c::av_frame_alloc(),
@@ -360,6 +533,53 @@ impl Frame {
                 ((*self.raw).linesize[0] * (*self.raw).height) as usize,
             )
         }
+    }
+
+    pub fn fill(
+        &self,
+        src: &[u8],
+        pix_fmt: ffmpeg_c::AVPixelFormat,
+        width: core::ffi::c_int,
+        height: core::ffi::c_int,
+        align: core::ffi::c_int,
+        pts: i64,
+        time_base: AVRational,
+    ) -> Result<(), Error> {
+        unsafe {
+            let src_size = catch_error(ffmpeg_c::av_image_fill_arrays(
+                (*self.raw).data.as_mut_ptr(),
+                (*self.raw).linesize.as_mut_ptr(),
+                src.as_ptr(),
+                pix_fmt,
+                width,
+                height,
+                align,
+            ))?;
+            if src_size as usize != src.len() {
+                return Err(Error::BUFFER_TOO_SMALL);
+            }
+
+            (*self.raw).format = pix_fmt;
+            (*self.raw).width = width;
+            (*self.raw).height = height;
+            (*self.raw).pts = pts;
+            (*self.raw).time_base = time_base;
+
+            Ok(())
+        }
+    }
+
+    pub fn raw_data<'a>(&'a mut self) -> &'a mut [*mut u8] {
+        unsafe { &mut (*self.raw).data }
+    }
+    pub fn linesize<'a>(&'a mut self) -> &'a mut [i32] {
+        unsafe { &mut (*self.raw).linesize }
+    }
+    pub fn pts<'a>(&'a mut self) -> &'a mut i64 {
+        unsafe { &mut (*self.raw).pts }
+    }
+    pub fn time_base<'a>(&'a mut self) -> &'a mut AVRational {
+        unsafe { &mut (*self.raw).time_base }
     }
 }
 
@@ -416,7 +636,58 @@ impl Drop for Decoder {
     }
 }
 
+pub struct Encoder {
+    context: *mut ffmpeg_c::AVCodecContext,
+}
+
+impl Encoder {
+    pub fn new(codec: &Codec, pix_fmt: ffmpeg_c::AVPixelFormat) -> Result<Encoder, Error> {
+        unsafe {
+            let context = ffmpeg_c::avcodec_alloc_context3(codec.raw);
+
+            (*context).bit_rate = 1000000;
+            (*context).width = 1920;
+            (*context).height = 1080;
+            (*context).time_base = ffmpeg_c::AVRational { num: 1, den: 25 };
+            (*context).gop_size = 10;
+            (*context).max_b_frames = 0;
+            (*context).pix_fmt = pix_fmt;
+
+            catch_error(ffmpeg_c::avcodec_open2(
+                context,
+                codec.raw,
+                core::ptr::null_mut(),
+            ))?;
+            Ok(Encoder { context: context })
+        }
+    }
+
+    pub fn send(&mut self, frame: &Frame) -> Result<(), Error> {
+        unsafe { catch_error(ffmpeg_c::avcodec_send_frame(self.context, frame.raw))? };
+        Ok(())
+    }
+
+    pub fn receive(&mut self) -> Result<Option<Packet>, Error> {
+        let packet = Packet::new();
+        match catch_error(unsafe { ffmpeg_c::avcodec_receive_packet(self.context, packet.raw) }) {
+            Ok(_) => Ok(Some(packet)),
+            Err(Error::EAGAIN) => Ok(None),
+            Err(Error::EOF) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        unsafe {
+            ffmpeg_c::avcodec_free_context(&mut self.context);
+        }
+    }
+}
+
 pub const AV_PIX_FMT_BGRA: ffmpeg_c::AVPixelFormat = ffmpeg_c::AVPixelFormat_AV_PIX_FMT_BGRA;
+pub const AV_PIX_FMT_YUV420P: ffmpeg_c::AVPixelFormat = ffmpeg_c::AVPixelFormat_AV_PIX_FMT_YUV420P;
 
 const fn AV_CHANNEL_LAYOUT_MASK(
     num_channels: core::ffi::c_int,

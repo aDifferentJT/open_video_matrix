@@ -16,6 +16,7 @@ dioxus = { version = "^0.3.0", features = ["html"] }
 dioxus-liveview = { version = "^0.3.0", features = ["axum"] }
 env_logger = "0.9"
 fermi = "^0.3.0"
+ffmpeg = { path = "../ffmpeg" }
 flume = "0.10.14"
 futures = "0.3.27"
 hyper = { version = "0.14", features = ["full"] }

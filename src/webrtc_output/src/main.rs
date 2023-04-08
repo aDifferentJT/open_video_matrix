@@ -1,16 +1,12 @@
 #![feature(async_closure)]
 
-use anyhow::Result;
 use dioxus::prelude::*;
 use futures::stream::StreamExt;
 use ipc_shared_object::IpcUnmanagedObject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::time::Duration;
 use triple_buffer::TripleBuffer;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
-use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
@@ -25,7 +21,7 @@ lazy_static! {
     static ref api: webrtc::api::API = (|| {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs();
-    
+
         // Create the API object with the MediaEngine
         APIBuilder::new().with_media_engine(media_engine).build()
     })();
@@ -88,7 +84,7 @@ const PLAYER_HTML: &str = r#"
 "#;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
     dcv_color_primitives::initialize();
 
     let Ok(listener) = std::net::TcpListener::bind("0.0.0.0:60000") else {
@@ -250,24 +246,31 @@ async fn encoder(
         IpcUnmanagedObject::new(name);
     let mut input_buffer = TripleBuffer::new(cpp_input_buffer.get_mut());
 
-    let Ok(mut encoder) = vpx_encode::Encoder::new(vpx_encode::Config {
-        width: triple_buffer::WIDTH as _,
-        height: triple_buffer::HEIGHT as _,
-        timebase: [1, 25],
-        bitrate: 1000,
-        codec: vpx_encode::VideoCodecId::VP8,
-    }) else {
-        panic!("Can't create encoder");
-    };
-
-    let video_track = Arc::new(TrackLocalStaticSample::new(
+    let video_track = std::sync::Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
-            mime_type: MIME_TYPE_VP8.to_owned(),
+            mime_type: MIME_TYPE_H264.to_owned(),
             ..Default::default()
         },
         "video".to_owned(),
         "webrtc-rs".to_owned(),
     ));
+
+    //let Some(codec) = ffmpeg::Codec::find_encoder(ffmpeg::AVCodecID_AV_CODEC_ID_H264) else {
+    let Some(codec) = ffmpeg::Codec::find_encoder_by_name("h264_videotoolbox") else {
+        panic!("Can't find encoder codec");
+    };
+    println!("Using codec {}", codec.long_name());
+    let mut scaler = ffmpeg::Scaler::new(
+        1920,
+        1080,
+        ffmpeg::AV_PIX_FMT_BGRA,
+        1920,
+        1080,
+        ffmpeg::AV_PIX_FMT_YUV420P,
+    );
+    let Ok(mut encoder) = ffmpeg::Encoder::new(&codec, ffmpeg::AV_PIX_FMT_YUV420P) else {
+        panic!("Can't create encoder");
+    };
 
     let video_track2 = video_track.clone();
     tokio::spawn(async move {
@@ -276,7 +279,7 @@ async fn encoder(
                 GuiToEncoderMsg::AddPeerConnection(peer_connection) => {
                     // Add this newly created track to the PeerConnection
                     let Ok(rtp_sender) = peer_connection
-                        .add_track(Arc::clone(&video_track2) as Arc<dyn TrackLocal + Send + Sync>)
+                        .add_track(std::sync::Arc::clone(&video_track2) as std::sync::Arc<dyn TrackLocal + Send + Sync>)
                         .await else {
                             panic!("Could not add video track to peer connection");
                         };
@@ -287,99 +290,47 @@ async fn encoder(
                     tokio::spawn(async move {
                         let mut rtcp_buf = vec![0u8; 1500];
                         while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
-                        Result::<()>::Ok(())
                     });
                 }
             }
         }
     });
 
-    let src_format = dcv_color_primitives::ImageFormat {
-        pixel_format: dcv_color_primitives::PixelFormat::Bgra,
-        color_space: dcv_color_primitives::ColorSpace::Rgb,
-        num_planes: 1,
-    };
-
-    let src_sizes: &mut [usize] = &mut [0usize; 1];
-    match dcv_color_primitives::get_buffers_size(
-        triple_buffer::WIDTH as u32,
-        triple_buffer::HEIGHT as u32,
-        &src_format,
-        None,
-        src_sizes,
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            println!("Error getting buffer size for I420 data: {}", e);
-            return;
-        }
-    }
-    if src_sizes[0] != triple_buffer::SIZE {
-        println!(
-            "Error, dcv thinks the correct size is {} when triple_buffer is of size {}",
-            src_sizes[0],
-            triple_buffer::SIZE
-        );
-    }
-
-    let dst_format = dcv_color_primitives::ImageFormat {
-        pixel_format: dcv_color_primitives::PixelFormat::I420,
-        color_space: dcv_color_primitives::ColorSpace::Bt601,
-        num_planes: 3,
-    };
-
-    let i420_data_sizes: &mut [usize] = &mut [0usize; 3];
-    match dcv_color_primitives::get_buffers_size(
-        triple_buffer::WIDTH as u32,
-        triple_buffer::HEIGHT as u32,
-        &dst_format,
-        None,
-        i420_data_sizes,
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            println!("Error getting buffer size for I420 data: {}", e);
-            return;
-        }
-    }
-
-    let mut i420_data: Vec<_> =
-        vec![0u8; i420_data_sizes[0] + i420_data_sizes[1] + i420_data_sizes[2]];
-
     let mut ticker = tokio::time::interval(Duration::from_millis(1000 / 25));
+    let mut pts = 1;
     loop {
-        let (i420_data1, i420_data23) = i420_data.split_at_mut(i420_data_sizes[0]);
-        let (i420_data2, i420_data3) = i420_data23.split_at_mut(i420_data_sizes[1]);
         input_buffer.about_to_read();
-        match dcv_color_primitives::convert_image(
-            triple_buffer::WIDTH as u32,
-            triple_buffer::HEIGHT as u32,
-            &src_format,
-            None,
-            &[&input_buffer.read().video_frame],
-            &dst_format,
-            None,
-            &mut [i420_data1, i420_data2, i420_data3],
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                println!("Error converting image: {}", e);
-                continue;
-            }
-        }
 
-        let Ok(packets) = encoder.encode(0, &i420_data) else { continue; };
+        let bgra_frame = ffmpeg::Frame::new();
+        bgra_frame
+            .fill(
+                &input_buffer.read().video_frame,
+                ffmpeg::AV_PIX_FMT_BGRA,
+                1920,
+                1080,
+                1,
+                pts,
+                ffmpeg::AVRational { num: 1, den: 25 },
+            )
+            .unwrap();
+        let mut yuv420_frame = scaler.scale(&bgra_frame).unwrap();
+        *yuv420_frame.pts() = pts;
+        *yuv420_frame.time_base() = ffmpeg::AVRational { num: 1, den: 25 };
 
-        for frame in packets {
-            let Ok(_) = video_track
-                .write_sample(&Sample {
-                    data: bytes::Bytes::copy_from_slice(frame.data),
+        encoder.send(&yuv420_frame).unwrap();
+
+        while let Some(packet) = encoder.receive().unwrap() {
+            video_track
+                .write_sample(&webrtc::media::Sample {
+                    data: bytes::Bytes::copy_from_slice(packet.data()),
                     duration: Duration::from_millis(1000 / 25),
                     ..Default::default()
                 })
-                .await else { continue; };
+                .await
+                .unwrap();
         }
 
         let _ = ticker.tick().await;
+        pts += 1;
     }
 }
